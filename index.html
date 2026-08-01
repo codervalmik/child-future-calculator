@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{
     --navy-950:#0A1220;
@@ -422,7 +423,7 @@
     </div>
 
     <div class="action-row">
-      <button class="btn-secondary devnag" onclick="downloadPDF()">📄 PDF डाउनलोड</button>
+      <button class="btn-secondary devnag" id="pdfBtn" onclick="downloadPDF()">📄 PDF डाउनलोड</button>
       <button class="btn-secondary whatsapp devnag" onclick="shareWhatsApp()">🟢 WhatsApp शेअर</button>
     </div>
     <button class="btn-reset devnag" onclick="resetAll()">पुन्हा सुरू करा (Reset)</button>
@@ -443,7 +444,7 @@
   </div>
   <div class="signature">
     <div class="sig-name">Valmik Dagu Ugale</div>
-    <div class="sig-arn">AMFI Registered Mutual Fund Distributor · ARN-142382 · EUIN-E243525</div>
+    <div class="sig-arn devnag">AMFI-registered mutual fund distributor &amp; SIF distributor · ARN-142382 · EUIN-E243525</div>
     <div class="sig-arn devnag">नाशिक, महाराष्ट्र · 9 वर्षांचा अनुभव</div>
   </div>
 </footer>
@@ -728,173 +729,96 @@ function resetAll(){
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
-/* ================= DEVANAGARI CANVAS -> PDF HELPER ================= */
-function devanagariToImage(text, fontSize, color, maxWidth, weight, align){
-  weight = weight || '600';
-  align = align || 'left';
-  const scale = 3; // high-res for crisp mobile PDF text
-  const c = document.createElement('canvas');
-  const ctx = c.getContext('2d');
-  ctx.font = weight+' '+ (fontSize*scale) + 'px "Noto Sans Devanagari", Arial';
-  const words = text.split(' ');
-  let lines=[], cur='';
-  words.forEach(w=>{
-    const test = cur? cur+' '+w : w;
-    if(ctx.measureText(test).width > maxWidth*scale && cur){ lines.push(cur); cur=w; }
-    else cur=test;
+/* ================= PDF EXPORT (DOM-capture — matches on-screen design exactly) ================= */
+// Replaces <input> elements with plain styled text divs so html2canvas renders
+// typed values reliably (form-control values aren't always captured correctly).
+function inputsToStaticText(container){
+  container.querySelectorAll('input').forEach(inp=>{
+    const div = document.createElement('div');
+    div.textContent = (inp.value && inp.value.trim()) ? inp.value : '—';
+    div.style.cssText = 'padding:11px 12px; border:1.5px solid #E7E1D2; border-radius:9px; font-size:14px; font-weight:700; color:#1C1B18; background:#fff; font-family:Inter,sans-serif;';
+    inp.replaceWith(div);
   });
-  if(cur) lines.push(cur);
-  const lineHeight = fontSize*scale*1.5;
-  c.width = maxWidth*scale;
-  c.height = lineHeight*lines.length + 10*scale;
-  ctx.font = weight+' '+ (fontSize*scale) + 'px "Noto Sans Devanagari", Arial';
-  ctx.fillStyle = color;
-  ctx.textAlign = align;
-  ctx.textBaseline = 'top';
-  lines.forEach((line,i)=>{
-    const x = align==='center'? c.width/2 : (align==='right'? c.width : 0);
-    ctx.fillText(line, x, i*lineHeight + 5*scale);
-  });
-  return {dataUrl:c.toDataURL('image/png'), widthPt:maxWidth, heightPt:(c.height/scale), lines:lines.length};
 }
 
-async function ensureFontLoaded(){
-  try{
-    await document.fonts.load('600 40px "Noto Sans Devanagari"');
-    await document.fonts.ready;
-  }catch(e){}
+// Cloning a <canvas> does not copy its drawn pixels — swap the clone for a
+// static image snapshot of the real, already-rendered chart.
+function snapshotCanvas(sourceRoot, cloneRoot, canvasId){
+  const orig = sourceRoot.querySelector('#'+canvasId);
+  const clone = cloneRoot.querySelector('#'+canvasId);
+  if(orig && clone){
+    const img = document.createElement('img');
+    img.src = orig.toDataURL('image/png');
+    img.style.cssText = 'width:100%; height:auto; margin-top:14px; border-radius:10px; background:#fff;';
+    clone.replaceWith(img);
+  }
 }
 
-/* ================= PDF EXPORT ================= */
 async function downloadPDF(){
   if(!lastResult){ alert('कृपया आधी गणना करा'); return; }
-  await ensureFontLoaded();
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF('p','mm','a4');
-  const pageW = 210, marginX = 16;
-  let y = 18;
 
-  // Header band
-  doc.setFillColor(15,27,46);
-  doc.rect(0,0,pageW,34,'F');
-  doc.setFillColor(201,162,39);
-  doc.rect(0,34,pageW,1.3,'F');
-  doc.setTextColor(255,255,255);
-  doc.setFont('helvetica','bold'); doc.setFontSize(16.5);
-  doc.text('Valmik Dagu Ugale  |  ARN-142382', marginX, 14);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
-  doc.text('AMFI-registered mutual fund distributor & SIF distributor', marginX, 20);
-  doc.setFontSize(9);
-  doc.text('8087126804  |  valmikugale@gmail.com  |  Nashik, Maharashtra - 422003', marginX, 26.5);
+  const pdfBtn = document.getElementById('pdfBtn');
+  const originalBtnText = pdfBtn.innerHTML;
+  pdfBtn.innerHTML = '⏳ तयार करत आहे...';
+  pdfBtn.disabled = true;
+
+  try{ await document.fonts.ready; }catch(e){}
+
+  // ---- Build an offscreen container that mirrors the on-screen design exactly ----
+  const SOURCE_WIDTH = 800; // px — the width the cloned content is laid out at before scaling into the PDF
+  const printRoot = document.createElement('div');
+  printRoot.style.cssText = 'position:fixed; left:-10000px; top:0; width:'+SOURCE_WIDTH+'px; background:#FBF7EE; z-index:-1;';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:26px;';
+
+  const letterheadClone = document.querySelector('.lh-card').cloneNode(true);
+  inputsToStaticText(letterheadClone);
+
+  const titleClone = document.querySelector('.page-title-block').cloneNode(true);
+  titleClone.style.margin = '20px auto 4px';
+
+  const resultsSource = document.getElementById('results');
+  const resultsClone = resultsSource.cloneNode(true);
+  resultsClone.style.display = 'block';
+  resultsClone.querySelectorAll('.action-row').forEach(el=>el.remove());
+  snapshotCanvas(resultsSource, resultsClone, 'chartCanvas');
+
+  const footerClone = document.querySelector('footer').cloneNode(true);
+  const ctaClone = document.querySelector('.final-cta').cloneNode(true);
+
+  wrap.appendChild(letterheadClone);
+  wrap.appendChild(titleClone);
+  wrap.appendChild(resultsClone);
+  wrap.appendChild(footerClone);
+  wrap.appendChild(ctaClone);
+  printRoot.appendChild(wrap);
+  document.body.appendChild(printRoot);
+
+  const cleanup = ()=>{
+    if(printRoot.parentNode) document.body.removeChild(printRoot);
+    pdfBtn.innerHTML = originalBtnText;
+    pdfBtn.disabled = false;
+  };
+
   try{
-    const logoSrc = document.querySelector('.lh-logo img').src;
-    const logoW = 15, logoH = logoW * (371/420);
-    doc.addImage(logoSrc, 'PNG', pageW-marginX-logoW, 6, logoW, logoH);
-  }catch(e){}
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('p','pt','a4');
+    const PDF_WIDTH_PT = 595.28; // A4 width in points
 
-  y = 44;
-  const clientNameVal = (document.getElementById('clientName').value||'').trim();
-  const childNameValPdf = (document.getElementById('childName').value||'').trim();
-  const childAgeValPdf = document.getElementById('childAge').value;
-  const reportDateVal = document.getElementById('reportDate').value;
-
-  const titleImg = devanagariToImage('मुलांचे शिक्षण व लग्न खर्च नियोजन अहवाल', 16, '#0F1B2E', pageW-2*marginX, '700','left');
-  doc.addImage(titleImg.dataUrl, 'PNG', marginX, y, titleImg.widthPt, titleImg.heightPt);
-  y += titleImg.heightPt + 3;
-
-  let metaLine = 'दिनांक: '+reportDateVal;
-  if(clientNameVal) metaLine += '   |   क्लायंट: '+clientNameVal;
-  if(childNameValPdf) metaLine += '   |   मूल: '+childNameValPdf+' (वय '+childAgeValPdf+')';
-  const metaImg = devanagariToImage(metaLine, 10, '#6B6456', pageW-2*marginX, '500');
-  doc.addImage(metaImg.dataUrl,'PNG', marginX, y, metaImg.widthPt, metaImg.heightPt);
-  y += metaImg.heightPt + 5;
-
-  doc.setDrawColor(231,225,210); doc.line(marginX, y, pageW-marginX, y);
-  y += 8;
-
-  for(const g of lastResult){
-    const goalTitleImg = devanagariToImage(g.emoji+' '+g.label+' ध्येय  (आजपासून '+g.years.toFixed(0)+' वर्षांनी)', 13.5, '#0F1B2E', pageW-2*marginX, '700');
-    doc.addImage(goalTitleImg.dataUrl,'PNG', marginX, y, goalTitleImg.widthPt, goalTitleImg.heightPt);
-    y += goalTitleImg.heightPt + 3;
-
-    const summaryText = 'आजची किंमत: '+inr(g.currentCost)+'   |   महागाई दर: '+document.getElementById(g.label==='शिक्षण'?'eduInflation':'marInflation').value+'%   |   भविष्यातील किंमत: '+inr(g.futureCost);
-    const sImg = devanagariToImage(summaryText, 10.5, '#3a3428', pageW-2*marginX, '500');
-    doc.addImage(sImg.dataUrl,'PNG', marginX, y, sImg.widthPt, sImg.heightPt);
-    y += sImg.heightPt + 5;
-
-    // Table header
-    doc.setFillColor(251,247,238);
-    doc.rect(marginX, y, pageW-2*marginX, 8.5, 'F');
-    const mr = g.annualReturn/12/100;
-    const p1 = solveSIP(g.netTarget, g.months, mr, 'level', 0);
-    const p2 = solveSIP(g.netTarget, g.months, mr, 'percent', g.stepPct);
-    const p3 = solveSIP(g.netTarget, g.months, mr, 'fixed', g.stepFix);
-    const rows = [
-      ['1. Normal SIP', inr(p1), inr(g.opt1.invested), inr(g.opt1.corpus)],
-      ['2. Step-up '+g.stepPct+'%/yr', inr(p2), inr(g.opt2.invested), inr(g.opt2.corpus)],
-      ['3. Fixed +'+inr(g.stepFix)+'/yr', inr(p3), inr(g.opt3.invested), inr(g.opt3.corpus)]
-    ];
-    const colX = [marginX+2, marginX+58, marginX+100, marginX+142];
-    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(20,20,20);
-    doc.text('Method', colX[0], y+6);
-    doc.text('Monthly SIP', colX[1], y+6);
-    doc.text('Total Invested', colX[2], y+6);
-    doc.text('Final Corpus', colX[3], y+6);
-    y += 8.5;
-    doc.setFont('helvetica','normal');
-    rows.forEach((r,idx)=>{
-      doc.setFillColor(idx%2===0?255:250, idx%2===0?255:249, idx%2===0?255:244);
-      doc.rect(marginX, y, pageW-2*marginX, 8.5, 'F');
-      doc.setTextColor(30,30,30); doc.setFontSize(9.5);
-      doc.text(r[0], colX[0], y+6);
-      doc.text(r[1], colX[1], y+6);
-      doc.text(r[2], colX[2], y+6);
-      doc.text(r[3], colX[3], y+6);
-      y += 8.5;
+    await doc.html(printRoot, {
+      x:0, y:0,
+      width: PDF_WIDTH_PT,
+      windowWidth: SOURCE_WIDTH,
+      autoPaging: 'text',
+      html2canvas: { scale: PDF_WIDTH_PT/SOURCE_WIDTH, backgroundColor:'#FBF7EE', useCORS:true }
     });
-    y += 9;
-    if(y > 248){ doc.addPage(); y = 18; }
+    doc.save('Child-Education-Marriage-Plan.pdf');
+    cleanup();
+  }catch(err){
+    cleanup();
+    alert('PDF तयार करताना अडचण आली. कृपया पुन्हा प्रयत्न करा.');
+    console.error(err);
   }
-
-  // Disclaimer (English, native text — no Devanagari needed here)
-  const discLines = [
-    'Disclaimer',
-    '1. Past performance may or may not be sustained in future and is not a guarantee of any future returns.',
-    '2. Please note that these calculators are for illustrations only and do not represent actual returns.',
-    '3. Mutual Funds do not have a fixed rate of return and it is not possible to predict the rate of return.',
-    '4. Mutual Fund Investments are subject to market risks, read all scheme related documents carefully.'
-  ];
-  const discBoxH = 8 + discLines.length*4.6 + 8;
-  if(y + discBoxH > 270){ doc.addPage(); y = 18; }
-  doc.setFillColor(241,238,227);
-  doc.rect(marginX, y, pageW-2*marginX, discBoxH, 'F');
-  let dy = y + 8;
-  doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(28,27,24);
-  doc.text(discLines[0], marginX+4, dy);
-  dy += 5;
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(107,100,86);
-  for(let i=1;i<discLines.length;i++){
-    const wrapped = doc.splitTextToSize(discLines[i], pageW-2*marginX-8);
-    doc.text(wrapped, marginX+4, dy);
-    dy += wrapped.length*4.2;
-  }
-  y += discBoxH + 8;
-
-  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(15,27,46);
-  doc.text('AMFI-registered mutual fund distributor & SIF distributor', pageW/2, y, {align:'center'});
-  y += 10;
-
-  doc.setDrawColor(231,225,210); doc.line(marginX, y, pageW-marginX, y);
-  y += 6;
-  doc.setFont('helvetica','bold'); doc.setFontSize(11.5); doc.setTextColor(15,27,46);
-  doc.text('Valmik Dagu Ugale', pageW/2, y, {align:'center'});
-  y += 5;
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(107,100,86);
-  doc.text('AMFI Registered Mutual Fund Distributor | SIF Distributor  |  ARN-142382  |  EUIN-E243525', pageW/2, y, {align:'center'});
-  y += 4.5;
-  doc.text('8087126804  |  valmikugale@gmail.com  |  Nashik, Maharashtra', pageW/2, y, {align:'center'});
-
-  doc.save('Child-Education-Marriage-Plan.pdf');
 }
 
 /* ================= WHATSAPP SHARE ================= */
