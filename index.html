@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{
     --navy-950:#0A1220;
@@ -728,29 +727,73 @@ function resetAll(){
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
-/* ================= PDF EXPORT (DOM-capture — matches on-screen design exactly) ================= */
-// Replaces <input> elements with plain styled text divs so html2canvas renders
-// typed values reliably (form-control values aren't always captured correctly).
-function inputsToStaticText(container){
-  container.querySelectorAll('input').forEach(inp=>{
-    const div = document.createElement('div');
-    div.textContent = (inp.value && inp.value.trim()) ? inp.value : '—';
-    div.style.cssText = 'padding:11px 12px; border:1.5px solid #E7E1D2; border-radius:9px; font-size:14px; font-weight:700; color:#1C1B18; background:#fff; font-family:Inter,sans-serif;';
-    inp.replaceWith(div);
+/* ================= PDF EXPORT ================= */
+// IMPORTANT — architecture note:
+// html2canvas (DOM-screenshot approach) was tried and REMOVED: it does not implement
+// proper text shaping for complex scripts. Devanagari conjuncts/matras render as
+// garbled boxes, and even the ₹ glyph breaks. The fix is to go back to native jsPDF
+// drawing, and render every string that contains Devanagari OR the ₹ symbol through
+// a real <canvas> (ctx.fillText) — the browser's own Canvas2D engine shapes Devanagari
+// and renders ₹ correctly — then place that as a PNG image via doc.addImage().
+// Pure-English text with no ₹ (disclaimer, table headers) stays native jsPDF text —
+// it's crisp and doesn't need this workaround.
+
+function textToImage(text, fontSize, color, maxWidth, weight, align){
+  weight = weight || '600';
+  align = align || 'left';
+  const scale = 3; // high-res for crisp mobile/print text
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d');
+  const fontStack = '"Noto Sans Devanagari", Arial, sans-serif';
+  ctx.font = weight+' '+(fontSize*scale)+'px '+fontStack;
+  const words = text.split(' ');
+  let lines=[], cur='';
+  words.forEach(w=>{
+    const test = cur? cur+' '+w : w;
+    if(ctx.measureText(test).width > maxWidth*scale && cur){ lines.push(cur); cur=w; }
+    else cur=test;
   });
+  if(cur) lines.push(cur);
+  const lineHeight = fontSize*scale*1.5;
+  c.width = maxWidth*scale;
+  c.height = lineHeight*lines.length + 10*scale;
+  ctx.font = weight+' '+(fontSize*scale)+'px '+fontStack;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'top';
+  lines.forEach((line,i)=>{
+    const x = align==='center'? c.width/2 : (align==='right'? c.width : 0);
+    ctx.fillText(line, x, i*lineHeight + 5*scale);
+  });
+  return {dataUrl:c.toDataURL('image/png'), widthPt:maxWidth, heightPt:(c.height/scale), lines:lines.length};
 }
 
-// Cloning a <canvas> does not copy its drawn pixels — swap the clone for a
-// static image snapshot of the real, already-rendered chart.
-function snapshotCanvas(sourceRoot, cloneRoot, canvasId){
-  const orig = sourceRoot.querySelector('#'+canvasId);
-  const clone = cloneRoot.querySelector('#'+canvasId);
-  if(orig && clone){
-    const img = document.createElement('img');
-    img.src = orig.toDataURL('image/png');
-    img.style.cssText = 'width:100%; height:auto; margin-top:14px; border-radius:10px; background:#fff;';
-    clone.replaceWith(img);
-  }
+// One table row (all columns) rendered as a single image so alignment stays exact
+// and every cell — including ₹ figures — shapes correctly.
+function rowToImage(cells, colX, rowWidth, fontSize, color, weight){
+  const scale = 3;
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d');
+  const fontStack = '"Noto Sans Devanagari", Arial, sans-serif';
+  const rowHeightPt = fontSize*2.1;
+  c.width = rowWidth*scale;
+  c.height = rowHeightPt*scale;
+  ctx.font = (weight||'500')+' '+(fontSize*scale)+'px '+fontStack;
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  cells.forEach((text,i)=>{
+    ctx.fillText(String(text), colX[i]*scale, c.height/2);
+  });
+  return {dataUrl:c.toDataURL('image/png'), widthPt:rowWidth, heightPt:rowHeightPt};
+}
+
+async function ensureFontLoaded(){
+  try{
+    await document.fonts.load('700 40px "Noto Sans Devanagari"');
+    await document.fonts.load('500 40px "Noto Sans Devanagari"');
+    await document.fonts.ready;
+  }catch(e){}
 }
 
 async function downloadPDF(){
@@ -761,82 +804,221 @@ async function downloadPDF(){
   pdfBtn.innerHTML = '⏳ तयार करत आहे...';
   pdfBtn.disabled = true;
 
-  try{ await document.fonts.ready; }catch(e){}
-
-  // ---- Build a container that mirrors the on-screen design exactly ----
-  // IMPORTANT: html2canvas often captures a BLANK page when the source element is
-  // pushed far off-screen (e.g. left:-10000px) — the browser doesn't reliably paint
-  // it. So instead we keep it inside the visible viewport (top:0, left:0) and hide
-  // it from the user with a full-screen opaque loading overlay on top.
-  const SOURCE_WIDTH = 800; // px — width the cloned content is laid out at before scaling into the PDF
-
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed; inset:0; background:#0F1B2E; z-index:99998; display:flex; align-items:center; justify-content:center; color:#fff; font-family:Poppins,sans-serif; font-size:15px; font-weight:600;';
-  overlay.textContent = 'PDF तयार करत आहे... थोडा वेळ थांबा';
-  document.body.appendChild(overlay);
-
-  const printRoot = document.createElement('div');
-  printRoot.style.cssText = 'position:fixed; top:0; left:0; width:'+SOURCE_WIDTH+'px; background:#FBF7EE; z-index:99997; overflow:visible;';
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'padding:26px;';
-
-  const letterheadClone = document.querySelector('.lh-card').cloneNode(true);
-  inputsToStaticText(letterheadClone);
-
-  const titleClone = document.querySelector('.page-title-block').cloneNode(true);
-  titleClone.style.margin = '20px auto 4px';
-
-  const resultsSource = document.getElementById('results');
-  const resultsClone = resultsSource.cloneNode(true);
-  resultsClone.style.display = 'block';
-  resultsClone.querySelectorAll('.action-row').forEach(el=>el.remove());
-  snapshotCanvas(resultsSource, resultsClone, 'chartCanvas');
-
-  const footerClone = document.querySelector('footer').cloneNode(true);
-  const ctaClone = document.querySelector('.final-cta').cloneNode(true);
-
-  wrap.appendChild(letterheadClone);
-  wrap.appendChild(titleClone);
-  wrap.appendChild(resultsClone);
-  wrap.appendChild(footerClone);
-  wrap.appendChild(ctaClone);
-  printRoot.appendChild(wrap);
-  document.body.appendChild(printRoot);
-
-  const cleanup = ()=>{
-    if(printRoot.parentNode) document.body.removeChild(printRoot);
-    if(overlay.parentNode) document.body.removeChild(overlay);
-    pdfBtn.innerHTML = originalBtnText;
-    pdfBtn.disabled = false;
-  };
-
   try{
-    // let the browser actually paint the new nodes before html2canvas reads them
-    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    await ensureFontLoaded();
 
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF('p','pt','a4');
-    const PDF_WIDTH_PT = 595.28; // A4 width in points
+    const doc = new jsPDF('p','mm','a4');
+    const pageW = 210, marginX = 16;
+    let y = 18;
 
-    await doc.html(printRoot, {
-      x:0, y:0,
-      width: PDF_WIDTH_PT,
-      windowWidth: SOURCE_WIDTH,
-      autoPaging: 'text',
-      html2canvas: {
-        scale: PDF_WIDTH_PT/SOURCE_WIDTH,
-        backgroundColor:'#FBF7EE',
-        useCORS:true,
-        scrollX: 0,
-        scrollY: -window.scrollY
+    const clientNameVal = (document.getElementById('clientName').value||'').trim();
+    const childNameVal = (document.getElementById('childName').value||'').trim();
+    const childAgeVal = document.getElementById('childAge').value;
+    const reportDateVal = document.getElementById('reportDate').value;
+
+    const addPageIfNeeded = (needed)=>{ if(y+needed > 275){ doc.addPage(); y = 18; } };
+
+    // ---- Header band ----
+    doc.setFillColor(15,27,46);
+    doc.rect(0,0,pageW,34,'F');
+    doc.setFillColor(201,162,39);
+    doc.rect(0,34,pageW,1.3,'F');
+    doc.setTextColor(255,255,255);
+    doc.setFont('helvetica','bold'); doc.setFontSize(16.5);
+    doc.text('Valmik Dagu Ugale  |  ARN-142382', marginX, 14);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+    doc.text('AMFI-registered mutual fund distributor & SIF distributor', marginX, 20);
+    doc.setFontSize(9);
+    doc.text('8087126804  |  valmikugale@gmail.com  |  Nashik, Maharashtra - 422003', marginX, 26.5);
+    try{
+      const logoSrc = document.querySelector('.lh-logo img').src;
+      const logoW = 15, logoH = logoW * (371/420);
+      doc.addImage(logoSrc, 'PNG', pageW-marginX-logoW, 6, logoW, logoH);
+    }catch(e){}
+
+    y = 44;
+    const titleImg = textToImage('मुलांचे शिक्षण व लग्न खर्च नियोजन अहवाल', 16, '#0F1B2E', pageW-2*marginX, '700','left');
+    doc.addImage(titleImg.dataUrl, 'PNG', marginX, y, titleImg.widthPt, titleImg.heightPt);
+    y += titleImg.heightPt + 3;
+
+    let metaLine = 'दिनांक: '+reportDateVal;
+    if(clientNameVal) metaLine += '   |   क्लायंट: '+clientNameVal;
+    if(childNameVal) metaLine += '   |   मूल: '+childNameVal+' (वय '+childAgeVal+')';
+    const metaImg = textToImage(metaLine, 10, '#6B6456', pageW-2*marginX, '500');
+    doc.addImage(metaImg.dataUrl,'PNG', marginX, y, metaImg.widthPt, metaImg.heightPt);
+    y += metaImg.heightPt + 5;
+
+    doc.setDrawColor(231,225,210); doc.line(marginX, y, pageW-marginX, y);
+    y += 8;
+
+    // ---- Per-goal sections ----
+    for(const g of lastResult){
+      addPageIfNeeded(30);
+      const goalTitleImg = textToImage(g.emoji+' '+g.label+' ध्येय  (आजपासून '+g.years.toFixed(0)+' वर्षांनी)', 13.5, '#0F1B2E', pageW-2*marginX, '700');
+      doc.addImage(goalTitleImg.dataUrl,'PNG', marginX, y, goalTitleImg.widthPt, goalTitleImg.heightPt);
+      y += goalTitleImg.heightPt + 3;
+
+      const summaryText = 'आजची किंमत: '+inr(g.currentCost)+'   |   महागाई दर: '+document.getElementById(g.label==='शिक्षण'?'eduInflation':'marInflation').value+'%   |   भविष्यातील किंमत: '+inr(g.futureCost);
+      const sImg = textToImage(summaryText, 10.5, '#3a3428', pageW-2*marginX, '500');
+      doc.addImage(sImg.dataUrl,'PNG', marginX, y, sImg.widthPt, sImg.heightPt);
+      y += sImg.heightPt + 5;
+
+      addPageIfNeeded(45);
+
+      const mr = g.annualReturn/12/100;
+      const p1 = solveSIP(g.netTarget, g.months, mr, 'level', 0);
+      const p2 = solveSIP(g.netTarget, g.months, mr, 'percent', g.stepPct);
+      const p3 = solveSIP(g.netTarget, g.months, mr, 'fixed', g.stepFix);
+      const rows = [
+        ['1. Normal SIP', inr(p1), inr(g.opt1.invested), inr(g.opt1.corpus)],
+        ['2. Step-up '+g.stepPct+'%/yr', inr(p2), inr(g.opt2.invested), inr(g.opt2.corpus)],
+        ['3. Fixed +'+inr(g.stepFix)+'/yr', inr(p3), inr(g.opt3.invested), inr(g.opt3.corpus)]
+      ];
+      const tableW = pageW-2*marginX;
+      const colX = [2, 60, 104, 148]; // relative to marginX, in mm
+
+      doc.setFillColor(251,247,238);
+      doc.rect(marginX, y, tableW, 8.5, 'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(20,20,20);
+      doc.text('Method', marginX+colX[0], y+6);
+      doc.text('Monthly SIP', marginX+colX[1], y+6);
+      doc.text('Total Invested', marginX+colX[2], y+6);
+      doc.text('Final Corpus', marginX+colX[3], y+6);
+      y += 8.5;
+
+      rows.forEach((r,idx)=>{
+        addPageIfNeeded(9);
+        doc.setFillColor(idx%2===0?255:250, idx%2===0?255:249, idx%2===0?255:244);
+        doc.rect(marginX, y, tableW, 8.5, 'F');
+        const rowImg = rowToImage(r, colX, tableW, 9.5, '#1E1E1E', '500');
+        doc.addImage(rowImg.dataUrl, 'PNG', marginX, y+(8.5-rowImg.heightPt)/2, rowImg.widthPt, rowImg.heightPt);
+        y += 8.5;
+      });
+      y += 4;
+
+      // Delay-cost callout
+      if(g.delayShortfallAmt!==null){
+        const locative = g.label==='शिक्षण' ? 'शिक्षणात' : 'लग्नात';
+        const delayText = '⏳ '+g.label+' ध्येयासाठी SIP आजपासून 1 वर्ष उशिरा सुरू केल्यास, '+inr(g.delayShortfallAmt)+' इतकी रक्कम कमी मिळेल. आणि '+locative+' तडजोड करावी लागेल. त्यामुळे लवकर सुरुवात हीच सर्वात मोठी गरज आहे.';
+        const dImg = textToImage(delayText, 9.5, '#7A3419', tableW-8, '600');
+        addPageIfNeeded(dImg.heightPt+8);
+        doc.setFillColor(251,237,231);
+        doc.roundedRect(marginX, y, tableW, dImg.heightPt+8, 2, 2, 'F');
+        doc.addImage(dImg.dataUrl,'PNG', marginX+4, y+4, dImg.widthPt, dImg.heightPt);
+        y += dImg.heightPt + 14;
+      } else {
+        y += 6;
       }
-    });
+    }
+
+    // ---- Combined summary (if 2 goals) ----
+    if(lastResult.length>1){
+      addPageIfNeeded(40);
+      let cOpt1=0,cOpt2=0,cOpt3=0,cInv1=0,cInv2=0,cInv3=0;
+      lastResult.forEach(g=>{
+        const mr=g.annualReturn/12/100;
+        cOpt1 += solveSIP(g.netTarget,g.months,mr,'level',0);
+        cOpt2 += solveSIP(g.netTarget,g.months,mr,'percent',g.stepPct);
+        cOpt3 += solveSIP(g.netTarget,g.months,mr,'fixed',g.stepFix);
+        cInv1 += g.opt1.invested; cInv2 += g.opt2.invested; cInv3 += g.opt3.invested;
+      });
+      const combTitleImg = textToImage('📊 दोन्ही ध्येयांसाठी एकत्रित मासिक हप्ता', 13, '#0F1B2E', pageW-2*marginX, '700');
+      doc.addImage(combTitleImg.dataUrl,'PNG', marginX, y, combTitleImg.widthPt, combTitleImg.heightPt);
+      y += combTitleImg.heightPt + 5;
+
+      const tableW = pageW-2*marginX;
+      const colXc = [2, 90, 140];
+      doc.setFillColor(251,247,238);
+      doc.rect(marginX, y, tableW, 8.5, 'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(20,20,20);
+      doc.text('Method', marginX+colXc[0], y+6);
+      doc.text('Combined Monthly SIP', marginX+colXc[1], y+6);
+      doc.text('Combined Invested', marginX+colXc[2], y+6);
+      y += 8.5;
+      const combRows = [
+        ['1. Normal SIP', inr(cOpt1), inr(cInv1)],
+        ['2. Step-up %', inr(cOpt2), inr(cInv2)],
+        ['3. Step-up Fixed', inr(cOpt3), inr(cInv3)]
+      ];
+      combRows.forEach((r,idx)=>{
+        addPageIfNeeded(9);
+        doc.setFillColor(idx%2===0?255:250, idx%2===0?255:249, idx%2===0?255:244);
+        doc.rect(marginX, y, tableW, 8.5, 'F');
+        const rowImg = rowToImage(r, colXc, tableW, 9.5, '#1E1E1E', '500');
+        doc.addImage(rowImg.dataUrl, 'PNG', marginX, y+(8.5-rowImg.heightPt)/2, rowImg.widthPt, rowImg.heightPt);
+        y += 8.5;
+      });
+      y += 8;
+    }
+
+    // ---- Chart (real canvas — copied directly, no shaping risk) ----
+    try{
+      const chartCanvas = document.getElementById('chartCanvas');
+      const chartDataUrl = chartCanvas.toDataURL('image/png');
+      const chartW = pageW-2*marginX;
+      const chartH = chartW * (chartCanvas.height/chartCanvas.width);
+      addPageIfNeeded(chartH+10);
+      doc.addImage(chartDataUrl,'PNG', marginX, y, chartW, chartH);
+      y += chartH + 10;
+    }catch(e){}
+
+    // ---- Disclaimer (plain English — native text, no shaping issue) ----
+    const discLines = [
+      'Disclaimer',
+      '1. Past performance may or may not be sustained in future and is not a guarantee of any future returns.',
+      '2. Please note that these calculators are for illustrations only and do not represent actual returns.',
+      '3. Mutual Funds do not have a fixed rate of return and it is not possible to predict the rate of return.',
+      '4. Mutual Fund Investments are subject to market risks, read all scheme related documents carefully.'
+    ];
+    const discBoxH = 8 + (discLines.length-1)*4.6 + 8;
+    addPageIfNeeded(discBoxH+4);
+    doc.setFillColor(241,238,227);
+    doc.rect(marginX, y, pageW-2*marginX, discBoxH, 'F');
+    let dy = y + 8;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(28,27,24);
+    doc.text(discLines[0], marginX+4, dy);
+    dy += 5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(107,100,86);
+    for(let i=1;i<discLines.length;i++){
+      const wrapped = doc.splitTextToSize(discLines[i], pageW-2*marginX-8);
+      doc.text(wrapped, marginX+4, dy);
+      dy += wrapped.length*4.2;
+    }
+    y += discBoxH + 10;
+
+    // ---- Signature ----
+    addPageIfNeeded(26);
+    doc.setDrawColor(231,225,210); doc.line(marginX, y, pageW-marginX, y);
+    y += 6;
+    doc.setFont('helvetica','bold'); doc.setFontSize(11.5); doc.setTextColor(15,27,46);
+    doc.text('Valmik Dagu Ugale', pageW/2, y, {align:'center'});
+    y += 5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(107,100,86);
+    doc.text('AMFI-registered mutual fund distributor & SIF distributor  |  ARN-142382  |  EUIN-E243525', pageW/2, y, {align:'center'});
+    y += 4.5;
+    doc.text('8087126804  |  valmikugale@gmail.com  |  Nashik, Maharashtra', pageW/2, y, {align:'center'});
+    y += 10;
+
+    // ---- Final CTA ----
+    const ctaHeading = 'हा प्लॅन प्रत्यक्षात कसा राबवायचा?';
+    const ctaBody = 'कॅल्क्युलेटरने तुम्हाला फक्त आवश्यक आकडेवारी दाखवली आहे. सविस्तर मार्गदर्शनासाठी आजच मोफत संपर्क साधा — WhatsApp: 8087126804 किंवा कॉल करा.';
+    const ctaHeadImg = textToImage(ctaHeading, 12.5, '#FFFFFF', pageW-2*marginX-8, '700', 'center');
+    const ctaBodyImg = textToImage(ctaBody, 9.5, '#C9D3E0', pageW-2*marginX-8, '500', 'center');
+    const ctaBoxH = ctaHeadImg.heightPt + ctaBodyImg.heightPt + 16;
+    addPageIfNeeded(ctaBoxH+4);
+    doc.setFillColor(15,27,46);
+    doc.roundedRect(marginX, y, pageW-2*marginX, ctaBoxH, 3, 3, 'F');
+    doc.addImage(ctaHeadImg.dataUrl,'PNG', marginX+4, y+6, ctaHeadImg.widthPt, ctaHeadImg.heightPt);
+    doc.addImage(ctaBodyImg.dataUrl,'PNG', marginX+4, y+6+ctaHeadImg.heightPt+2, ctaBodyImg.widthPt, ctaBodyImg.heightPt);
+
     doc.save('Child-Education-Marriage-Plan.pdf');
-    cleanup();
   }catch(err){
-    cleanup();
     alert('PDF तयार करताना अडचण आली. कृपया पुन्हा प्रयत्न करा.');
     console.error(err);
+  }finally{
+    pdfBtn.innerHTML = originalBtnText;
+    pdfBtn.disabled = false;
   }
 }
 
