@@ -440,7 +440,6 @@
       <li>Mutual Funds do not have a fixed rate of return and it is not possible to predict the rate of return.</li>
       <li>Mutual Fund Investments are subject to market risks, read all scheme related documents carefully.</li>
     </ol>
-    <div class="disclaimer-tag">AMFI-registered mutual fund distributor &amp; SIF distributor</div>
   </div>
   <div class="signature">
     <div class="sig-name">Valmik Dagu Ugale</div>
@@ -764,10 +763,20 @@ async function downloadPDF(){
 
   try{ await document.fonts.ready; }catch(e){}
 
-  // ---- Build an offscreen container that mirrors the on-screen design exactly ----
-  const SOURCE_WIDTH = 800; // px — the width the cloned content is laid out at before scaling into the PDF
+  // ---- Build a container that mirrors the on-screen design exactly ----
+  // IMPORTANT: html2canvas often captures a BLANK page when the source element is
+  // pushed far off-screen (e.g. left:-10000px) — the browser doesn't reliably paint
+  // it. So instead we keep it inside the visible viewport (top:0, left:0) and hide
+  // it from the user with a full-screen opaque loading overlay on top.
+  const SOURCE_WIDTH = 800; // px — width the cloned content is laid out at before scaling into the PDF
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; background:#0F1B2E; z-index:99998; display:flex; align-items:center; justify-content:center; color:#fff; font-family:Poppins,sans-serif; font-size:15px; font-weight:600;';
+  overlay.textContent = 'PDF तयार करत आहे... थोडा वेळ थांबा';
+  document.body.appendChild(overlay);
+
   const printRoot = document.createElement('div');
-  printRoot.style.cssText = 'position:fixed; left:-10000px; top:0; width:'+SOURCE_WIDTH+'px; background:#FBF7EE; z-index:-1;';
+  printRoot.style.cssText = 'position:fixed; top:0; left:0; width:'+SOURCE_WIDTH+'px; background:#FBF7EE; z-index:99997; overflow:visible;';
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:26px;';
 
@@ -796,11 +805,15 @@ async function downloadPDF(){
 
   const cleanup = ()=>{
     if(printRoot.parentNode) document.body.removeChild(printRoot);
+    if(overlay.parentNode) document.body.removeChild(overlay);
     pdfBtn.innerHTML = originalBtnText;
     pdfBtn.disabled = false;
   };
 
   try{
+    // let the browser actually paint the new nodes before html2canvas reads them
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF('p','pt','a4');
     const PDF_WIDTH_PT = 595.28; // A4 width in points
@@ -810,7 +823,13 @@ async function downloadPDF(){
       width: PDF_WIDTH_PT,
       windowWidth: SOURCE_WIDTH,
       autoPaging: 'text',
-      html2canvas: { scale: PDF_WIDTH_PT/SOURCE_WIDTH, backgroundColor:'#FBF7EE', useCORS:true }
+      html2canvas: {
+        scale: PDF_WIDTH_PT/SOURCE_WIDTH,
+        backgroundColor:'#FBF7EE',
+        useCORS:true,
+        scrollX: 0,
+        scrollY: -window.scrollY
+      }
     });
     doc.save('Child-Education-Marriage-Plan.pdf');
     cleanup();
