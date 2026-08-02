@@ -901,16 +901,14 @@ function buildPdfDoc(){
 
   pdfSafeText(doc, 'तुमच्या आर्थिक भविष्याचा विश्वासू जोडीदार', margin+22, y+17.5, { fontMM:4.3, color:'#1e3a8a', weight:'italic' });
 
-  // Contact block sits BELOW the name/role/tagline (not beside it) so long
-  // name/ARN text never crowds into "Contact:" — this was the overlap bug.
-  // Each contact detail is its own line, stacked, right-aligned.
-  doc.setFontSize(10.5);
-  doc.setTextColor(90,90,90);
-  doc.text('Contact: 8087126804', pageW-margin, y+18.5, { align:'right' });
-  doc.text('valmikugale@gmail.com', pageW-margin, y+23, { align:'right' });
-  doc.text('Nashik, Maharashtra - 422003', pageW-margin, y+27.5, { align:'right' });
+  // Contact block — top-right, matching the on-screen letterhead exactly
+  // (Marathi labels, one detail per line). Safe from the earlier overlap bug
+  // because each line is short on its own — unlike the old single combined line.
+  pdfSafeText(doc, 'संपर्क: 8087126804', pageW-margin, y+4, { fontMM:3.7, color:'#33404E', align:'right' });
+  pdfSafeText(doc, 'ईमेल: valmikugale@gmail.com', pageW-margin, y+8.5, { fontMM:3.7, color:'#33404E', align:'right' });
+  pdfSafeText(doc, 'नाशिक, महाराष्ट्र - 422003', pageW-margin, y+13, { fontMM:3.7, color:'#33404E', align:'right' });
 
-  y += 35;
+  y += 25;
   doc.setDrawColor(30,58,138);
   doc.setLineWidth(0.6);
   doc.line(margin, y, pageW-margin, y);
