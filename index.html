@@ -197,15 +197,21 @@
   .delay-box .txt{font-size:13px; color:#7A3419; line-height:1.6;}
   .delay-box .txt b{color:var(--terracotta);}
 
-  .action-row{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:20px;}
-  .btn-secondary{
-    padding:13px 10px; border-radius:11px; border:1.5px solid var(--navy-900);
-    background:#fff; color:var(--navy-900); font-weight:700; font-size:13.5px;
-    font-family:'Poppins',sans-serif; cursor:pointer; display:flex; align-items:center;
-    justify-content:center; gap:7px;
+  .action-buttons-section{margin-top:20px;}
+  .action-buttons-row{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  @media (max-width:480px){ .action-buttons-row{grid-template-columns:1fr;} }
+  .btn-action{
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    padding:13px 10px; border-radius:11px; font-size:13.5px; font-weight:700;
+    color:#fff; border:none; cursor:pointer; text-decoration:none;
+    font-family:'Poppins',sans-serif; transition:opacity .2s;
   }
-  .btn-secondary.whatsapp{border-color:#25D366; color:#1B9E4F;}
-  .btn-secondary:active{transform:scale(.98);}
+  .btn-action:active{transform:scale(.98);}
+  .btn-action:disabled{opacity:.6; cursor:not-allowed;}
+  .btn-pdf{background:var(--navy-900);}
+  .btn-share-wa{background:#25D366;}
+  .btn-email{background:#334155; width:100%; margin-top:10px;}
+  .share-note{margin-top:10px; font-size:11.5px; color:var(--muted); text-align:center; line-height:1.55;}
 
   .btn-reset{
     width:100%; margin-top:10px; padding:11px; border:none; background:transparent;
@@ -421,9 +427,13 @@
       <canvas id="chartCanvas" width="700" height="320"></canvas>
     </div>
 
-    <div class="action-row">
-      <button class="btn-secondary devnag" id="pdfBtn" onclick="downloadPDF()">📄 PDF डाउनलोड</button>
-      <button class="btn-secondary whatsapp devnag" onclick="shareWhatsApp()">🟢 WhatsApp शेअर</button>
+    <div class="action-buttons-section">
+      <div class="action-buttons-row">
+        <button type="button" class="btn-action btn-pdf devnag" id="pdfBtn" onclick="downloadPdfReport()">📄 PDF डाउनलोड</button>
+        <button type="button" class="btn-action btn-share-wa devnag" onclick="sharePdfWhatsApp()">📲 WhatsApp शेअर</button>
+      </div>
+      <button type="button" class="btn-action btn-email devnag" onclick="sharePdfEmail()">✉️ Email ने शेअर करा</button>
+      <p class="share-note devnag">ज्या डिव्हाइसवर थेट फाइल शेअरिंग सपोर्ट नाही, तिथे PDF आपोआप डाउनलोड होईल — कृपया ती स्वतः जोडून (attach करून) पाठवा.</p>
     </div>
     <button class="btn-reset devnag" onclick="resetAll()">पुन्हा सुरू करा (Reset)</button>
   </div>
@@ -727,327 +737,459 @@ function resetAll(){
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
-/* ================= PDF EXPORT ================= */
-// IMPORTANT — architecture note:
-// html2canvas (DOM-screenshot approach) was tried and REMOVED: it does not implement
-// proper text shaping for complex scripts. Devanagari conjuncts/matras render as
-// garbled boxes, and even the ₹ glyph breaks. The fix is to go back to native jsPDF
-// drawing, and render every string that contains Devanagari OR the ₹ symbol through
-// a real <canvas> (ctx.fillText) — the browser's own Canvas2D engine shapes Devanagari
-// and renders ₹ correctly — then place that as a PNG image via doc.addImage().
-// Pure-English text with no ₹ (disclaimer, table headers) stays native jsPDF text —
-// it's crisp and doesn't need this workaround.
+/* ================= PDF REPORT GENERATION ================= */
+// Ported from the retirement calculator's exact, proven system:
+// jsPDF's built-in fonts don't support Devanagari (or the ₹ glyph). Any ASCII-only
+// text stays native vector text (crisp, small file). Anything containing Devanagari
+// or ₹ gets rasterized via a real <canvas> (the browser's own font engine, which
+// shapes Devanagari correctly) and placed as a PNG image with doc.addImage().
 
-const PT2MM = 0.352778; // convert a point size to millimetres, matching jsPDF's own unit convention
+const PDF_PX_PER_MM = 7; // resolution used when rasterizing non-Latin text (~178 DPI equivalent)
 
-function textToImage(text, fontSizePt, color, maxWidth, weight, align){
-  weight = weight || '600';
-  align = align || 'left';
-  const fontSize = fontSizePt * PT2MM; // internal canvas math is in mm (doc unit)
-  const scale = 3; // high-res for crisp mobile/print text
-  const c = document.createElement('canvas');
-  const ctx = c.getContext('2d');
-  const fontStack = '"Noto Sans Devanagari", Arial, sans-serif';
-  ctx.font = weight+' '+(fontSize*scale)+'px '+fontStack;
-  const words = text.split(' ');
-  let lines=[], cur='';
-  words.forEach(w=>{
-    const test = cur? cur+' '+w : w;
-    if(ctx.measureText(test).width > maxWidth*scale && cur){ lines.push(cur); cur=w; }
-    else cur=test;
-  });
-  if(cur) lines.push(cur);
-  const lineHeight = fontSize*scale*1.42;
-  c.width = maxWidth*scale;
-  c.height = lineHeight*lines.length + 6*scale;
-  ctx.font = weight+' '+(fontSize*scale)+'px '+fontStack;
+function containsNonLatin(str){
+  return /[^\x00-\x7F]/.test(str);
+}
+
+// Measures the real ink extents of a piece of text using the canvas TextMetrics
+// API (actualBoundingBoxAscent/Descent). Critical for Devanagari: matras (vowel
+// signs) can extend well above/below a Latin-only estimate, clipping them.
+function measureInkBox(ctx, text, fontPx){
+  const m = ctx.measureText(text);
+  let ascent = m.actualBoundingBoxAscent;
+  let descent = m.actualBoundingBoxDescent;
+  if(!ascent || isNaN(ascent) || ascent <= 0) ascent = fontPx * 0.9;
+  if(!descent || isNaN(descent) || descent <= 0) descent = fontPx * 0.45;
+  return { ascent, descent, width: m.width };
+}
+
+function renderTextToImage(text, fontMM, color, weight){
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const fontPx = Math.round(fontMM * PDF_PX_PER_MM);
+  const fontSpec = (weight||'normal')+' '+fontPx+'px "Noto Sans Devanagari", "Nirmala UI", Arial, sans-serif';
+  ctx.font = fontSpec;
+  const box = measureInkBox(ctx, text, fontPx);
+  const padV = Math.ceil(fontPx * 0.3);
+  canvas.width = Math.ceil(box.width) + 6;
+  canvas.height = Math.ceil(box.ascent + box.descent) + padV * 2;
+  ctx.font = fontSpec; // context resets on resize, re-apply
   ctx.fillStyle = color;
-  ctx.textAlign = align;
-  ctx.textBaseline = 'top';
-  lines.forEach((line,i)=>{
-    const x = align==='center'? c.width/2 : (align==='right'? c.width : 0);
-    ctx.fillText(line, x, i*lineHeight + 3*scale);
-  });
-  return {dataUrl:c.toDataURL('image/png'), widthPt:maxWidth, heightPt:(c.height/scale), lines:lines.length};
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, 3, box.ascent + padV);
+  return {
+    dataUrl: canvas.toDataURL('image/png'),
+    wmm: canvas.width / PDF_PX_PER_MM,
+    hmm: canvas.height / PDF_PX_PER_MM,
+    baselineMM: (box.ascent + padV) / PDF_PX_PER_MM
+  };
 }
 
-// One table row (all columns) rendered as a single image so alignment stays exact
-// and every cell — including ₹ figures — shapes correctly.
-function rowToImage(cells, colX, rowWidth, fontSizePt, color, weight){
-  const fontSize = fontSizePt * PT2MM;
-  const scale = 3;
-  const c = document.createElement('canvas');
-  const ctx = c.getContext('2d');
-  const fontStack = '"Noto Sans Devanagari", Arial, sans-serif';
-  const rowHeightPt = fontSize*1.9;
-  c.width = rowWidth*scale;
-  c.height = rowHeightPt*scale;
-  ctx.font = (weight||'500')+' '+(fontSize*scale)+'px '+fontStack;
-  ctx.fillStyle = color;
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  cells.forEach((text,i)=>{
-    ctx.fillText(String(text), colX[i]*scale, c.height/2);
-  });
-  return {dataUrl:c.toDataURL('image/png'), widthPt:rowWidth, heightPt:rowHeightPt};
-}
-
-async function ensureFontLoaded(){
-  try{
-    await document.fonts.load('700 40px "Noto Sans Devanagari"');
-    await document.fonts.load('500 40px "Noto Sans Devanagari"');
-    await document.fonts.ready;
-  }catch(e){}
-}
-
-async function downloadPDF(){
-  if(!lastResult){ alert('कृपया आधी गणना करा'); return; }
-
-  const pdfBtn = document.getElementById('pdfBtn');
-  const originalBtnText = pdfBtn.innerHTML;
-  pdfBtn.innerHTML = '⏳ तयार करत आहे...';
-  pdfBtn.disabled = true;
-
-  try{
-    await ensureFontLoaded();
-
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF('p','mm','a4');
-    const pageW = 210, marginX = 16;
-    let y = 18;
-
-    const clientNameVal = (document.getElementById('clientName').value||'').trim();
-    const childNameVal = (document.getElementById('childName').value||'').trim();
-    const childAgeVal = document.getElementById('childAge').value;
-    const reportDateVal = document.getElementById('reportDate').value;
-
-    const addPageIfNeeded = (needed)=>{ if(y+needed > 275){ doc.addPage(); y = 18; } };
-
-    // ---- Header band ----
-    doc.setFillColor(15,27,46);
-    doc.rect(0,0,pageW,34,'F');
-    doc.setFillColor(201,162,39);
-    doc.rect(0,34,pageW,1.3,'F');
-    doc.setTextColor(255,255,255);
-    doc.setFont('helvetica','bold'); doc.setFontSize(16.5);
-    doc.text('Valmik Dagu Ugale  |  ARN-142382', marginX, 14);
-    doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
-    doc.text('AMFI-registered mutual fund distributor & SIF distributor', marginX, 20);
-    doc.setFontSize(9);
-    doc.text('8087126804  |  valmikugale@gmail.com  |  Nashik, Maharashtra - 422003', marginX, 26.5);
-    try{
-      const logoSrc = document.querySelector('.lh-logo img').src;
-      const logoW = 15, logoH = logoW * (371/420);
-      doc.addImage(logoSrc, 'PNG', pageW-marginX-logoW, 6, logoW, logoH);
-    }catch(e){}
-
-    y = 44;
-    const titleImg = textToImage('मुलांचे शिक्षण व लग्न खर्च नियोजन अहवाल', 16, '#0F1B2E', pageW-2*marginX, '700','left');
-    doc.addImage(titleImg.dataUrl, 'PNG', marginX, y, titleImg.widthPt, titleImg.heightPt);
-    y += titleImg.heightPt + 3;
-
-    let metaLine = 'दिनांक: '+reportDateVal;
-    if(clientNameVal) metaLine += '   |   क्लायंट: '+clientNameVal;
-    if(childNameVal) metaLine += '   |   मूल: '+childNameVal+' (वय '+childAgeVal+')';
-    const metaImg = textToImage(metaLine, 10, '#6B6456', pageW-2*marginX, '500');
-    doc.addImage(metaImg.dataUrl,'PNG', marginX, y, metaImg.widthPt, metaImg.heightPt);
-    y += metaImg.heightPt + 5;
-
-    doc.setDrawColor(231,225,210); doc.line(marginX, y, pageW-marginX, y);
-    y += 8;
-
-    // ---- Per-goal sections ----
-    for(const g of lastResult){
-      addPageIfNeeded(30);
-      const goalTitleImg = textToImage(g.emoji+' '+g.label+' ध्येय  (आजपासून '+g.years.toFixed(0)+' वर्षांनी)', 13.5, '#0F1B2E', pageW-2*marginX, '700');
-      doc.addImage(goalTitleImg.dataUrl,'PNG', marginX, y, goalTitleImg.widthPt, goalTitleImg.heightPt);
-      y += goalTitleImg.heightPt + 3;
-
-      const summaryText = 'आजची किंमत: '+inr(g.currentCost)+'   |   महागाई दर: '+document.getElementById(g.label==='शिक्षण'?'eduInflation':'marInflation').value+'%   |   भविष्यातील किंमत: '+inr(g.futureCost);
-      const sImg = textToImage(summaryText, 10.5, '#3a3428', pageW-2*marginX, '500');
-      doc.addImage(sImg.dataUrl,'PNG', marginX, y, sImg.widthPt, sImg.heightPt);
-      y += sImg.heightPt + 5;
-
-      addPageIfNeeded(45);
-
-      const mr = g.annualReturn/12/100;
-      const p1 = solveSIP(g.netTarget, g.months, mr, 'level', 0);
-      const p2 = solveSIP(g.netTarget, g.months, mr, 'percent', g.stepPct);
-      const p3 = solveSIP(g.netTarget, g.months, mr, 'fixed', g.stepFix);
-      const rows = [
-        ['1. Normal SIP', inr(p1), inr(g.opt1.invested), inr(g.opt1.corpus)],
-        ['2. Step-up '+g.stepPct+'%/yr', inr(p2), inr(g.opt2.invested), inr(g.opt2.corpus)],
-        ['3. Fixed +'+inr(g.stepFix)+'/yr', inr(p3), inr(g.opt3.invested), inr(g.opt3.corpus)]
-      ];
-      const tableW = pageW-2*marginX;
-      const colX = [2, 60, 104, 148]; // relative to marginX, in mm
-
-      doc.setFillColor(251,247,238);
-      doc.rect(marginX, y, tableW, 8.5, 'F');
-      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(20,20,20);
-      doc.text('Method', marginX+colX[0], y+6);
-      doc.text('Monthly SIP', marginX+colX[1], y+6);
-      doc.text('Total Invested', marginX+colX[2], y+6);
-      doc.text('Final Corpus', marginX+colX[3], y+6);
-      y += 8.5;
-
-      rows.forEach((r,idx)=>{
-        addPageIfNeeded(9);
-        doc.setFillColor(idx%2===0?255:250, idx%2===0?255:249, idx%2===0?255:244);
-        doc.rect(marginX, y, tableW, 8.5, 'F');
-        const rowImg = rowToImage(r, colX, tableW, 9.5, '#1E1E1E', '500');
-        doc.addImage(rowImg.dataUrl, 'PNG', marginX, y+(8.5-rowImg.heightPt)/2, rowImg.widthPt, rowImg.heightPt);
-        y += 8.5;
-      });
-      y += 4;
-
-      // Delay-cost callout
-      if(g.delayShortfallAmt!==null){
-        const locative = g.label==='शिक्षण' ? 'शिक्षणात' : 'लग्नात';
-        const delayText = '⏳ '+g.label+' ध्येयासाठी SIP आजपासून 1 वर्ष उशिरा सुरू केल्यास, '+inr(g.delayShortfallAmt)+' इतकी रक्कम कमी मिळेल. आणि '+locative+' तडजोड करावी लागेल. त्यामुळे लवकर सुरुवात हीच सर्वात मोठी गरज आहे.';
-        const dImg = textToImage(delayText, 9.5, '#7A3419', tableW-8, '600');
-        addPageIfNeeded(dImg.heightPt+8);
-        doc.setFillColor(251,237,231);
-        doc.roundedRect(marginX, y, tableW, dImg.heightPt+8, 2, 2, 'F');
-        doc.addImage(dImg.dataUrl,'PNG', marginX+4, y+4, dImg.widthPt, dImg.heightPt);
-        y += dImg.heightPt + 8;
-      } else {
-        y += 4;
-      }
-    }
-
-    // ---- Combined summary (if 2 goals) ----
-    if(lastResult.length>1){
-      addPageIfNeeded(40);
-      let cOpt1=0,cOpt2=0,cOpt3=0,cInv1=0,cInv2=0,cInv3=0;
-      lastResult.forEach(g=>{
-        const mr=g.annualReturn/12/100;
-        cOpt1 += solveSIP(g.netTarget,g.months,mr,'level',0);
-        cOpt2 += solveSIP(g.netTarget,g.months,mr,'percent',g.stepPct);
-        cOpt3 += solveSIP(g.netTarget,g.months,mr,'fixed',g.stepFix);
-        cInv1 += g.opt1.invested; cInv2 += g.opt2.invested; cInv3 += g.opt3.invested;
-      });
-      const combTitleImg = textToImage('📊 दोन्ही ध्येयांसाठी एकत्रित मासिक हप्ता', 13, '#0F1B2E', pageW-2*marginX, '700');
-      doc.addImage(combTitleImg.dataUrl,'PNG', marginX, y, combTitleImg.widthPt, combTitleImg.heightPt);
-      y += combTitleImg.heightPt + 5;
-
-      const tableW = pageW-2*marginX;
-      const colXc = [2, 90, 140];
-      doc.setFillColor(251,247,238);
-      doc.rect(marginX, y, tableW, 8.5, 'F');
-      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(20,20,20);
-      doc.text('Method', marginX+colXc[0], y+6);
-      doc.text('Combined Monthly SIP', marginX+colXc[1], y+6);
-      doc.text('Combined Invested', marginX+colXc[2], y+6);
-      y += 8.5;
-      const combRows = [
-        ['1. Normal SIP', inr(cOpt1), inr(cInv1)],
-        ['2. Step-up %', inr(cOpt2), inr(cInv2)],
-        ['3. Step-up Fixed', inr(cOpt3), inr(cInv3)]
-      ];
-      combRows.forEach((r,idx)=>{
-        addPageIfNeeded(9);
-        doc.setFillColor(idx%2===0?255:250, idx%2===0?255:249, idx%2===0?255:244);
-        doc.rect(marginX, y, tableW, 8.5, 'F');
-        const rowImg = rowToImage(r, colXc, tableW, 9.5, '#1E1E1E', '500');
-        doc.addImage(rowImg.dataUrl, 'PNG', marginX, y+(8.5-rowImg.heightPt)/2, rowImg.widthPt, rowImg.heightPt);
-        y += 8.5;
-      });
-      y += 6;
-    }
-
-    // ---- Chart (real canvas — copied directly, no shaping risk) ----
-    try{
-      const chartCanvas = document.getElementById('chartCanvas');
-      const chartDataUrl = chartCanvas.toDataURL('image/png');
-      const chartW = pageW-2*marginX;
-      const chartH = chartW * (chartCanvas.height/chartCanvas.width);
-      addPageIfNeeded(chartH+10);
-      doc.addImage(chartDataUrl,'PNG', marginX, y, chartW, chartH);
-      y += chartH + 10;
-    }catch(e){}
-
-    // ---- Disclaimer (plain English — native text, no shaping issue) ----
-    const discLines = [
-      'Disclaimer',
-      '1. Past performance may or may not be sustained in future and is not a guarantee of any future returns.',
-      '2. Please note that these calculators are for illustrations only and do not represent actual returns.',
-      '3. Mutual Funds do not have a fixed rate of return and it is not possible to predict the rate of return.',
-      '4. Mutual Fund Investments are subject to market risks, read all scheme related documents carefully.'
-    ];
-    const discBoxH = 8 + (discLines.length-1)*4.6 + 8;
-    addPageIfNeeded(discBoxH+4);
-    doc.setFillColor(241,238,227);
-    doc.rect(marginX, y, pageW-2*marginX, discBoxH, 'F');
-    let dy = y + 8;
-    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(28,27,24);
-    doc.text(discLines[0], marginX+4, dy);
-    dy += 5;
-    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(107,100,86);
-    for(let i=1;i<discLines.length;i++){
-      const wrapped = doc.splitTextToSize(discLines[i], pageW-2*marginX-8);
-      doc.text(wrapped, marginX+4, dy);
-      dy += wrapped.length*4.2;
-    }
-    y += discBoxH + 10;
-
-    // ---- Signature ----
-    addPageIfNeeded(26);
-    doc.setDrawColor(231,225,210); doc.line(marginX, y, pageW-marginX, y);
-    y += 6;
-    doc.setFont('helvetica','bold'); doc.setFontSize(11.5); doc.setTextColor(15,27,46);
-    doc.text('Valmik Dagu Ugale', pageW/2, y, {align:'center'});
-    y += 5;
-    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(107,100,86);
-    doc.text('AMFI-registered mutual fund distributor & SIF distributor  |  ARN-142382  |  EUIN-E243525', pageW/2, y, {align:'center'});
-    y += 4.5;
-    doc.text('8087126804  |  valmikugale@gmail.com  |  Nashik, Maharashtra', pageW/2, y, {align:'center'});
-    y += 10;
-
-    // ---- Final CTA ----
-    const ctaHeading = 'हा प्लॅन प्रत्यक्षात कसा राबवायचा?';
-    const ctaBody = 'कॅल्क्युलेटरने तुम्हाला फक्त आवश्यक आकडेवारी दाखवली आहे. सविस्तर मार्गदर्शनासाठी आजच मोफत संपर्क साधा — WhatsApp: 8087126804 किंवा कॉल करा.';
-    const ctaHeadImg = textToImage(ctaHeading, 12.5, '#FFFFFF', pageW-2*marginX-8, '700', 'center');
-    const ctaBodyImg = textToImage(ctaBody, 9.5, '#C9D3E0', pageW-2*marginX-8, '500', 'center');
-    const ctaBoxH = ctaHeadImg.heightPt + ctaBodyImg.heightPt + 16;
-    addPageIfNeeded(ctaBoxH+4);
-    doc.setFillColor(15,27,46);
-    doc.roundedRect(marginX, y, pageW-2*marginX, ctaBoxH, 3, 3, 'F');
-    doc.addImage(ctaHeadImg.dataUrl,'PNG', marginX+4, y+6, ctaHeadImg.widthPt, ctaHeadImg.heightPt);
-    doc.addImage(ctaBodyImg.dataUrl,'PNG', marginX+4, y+6+ctaHeadImg.heightPt+2, ctaBodyImg.widthPt, ctaBodyImg.heightPt);
-
-    doc.save('Child-Education-Marriage-Plan.pdf');
-  }catch(err){
-    alert('PDF तयार करताना अडचण आली. कृपया पुन्हा प्रयत्न करा.');
-    console.error(err);
-  }finally{
-    pdfBtn.innerHTML = originalBtnText;
-    pdfBtn.disabled = false;
+// Writes text at (x,y) — auto-rasterizes if it contains non-ASCII characters.
+// y is the text baseline, matching doc.text()'s own convention.
+function pdfSafeText(doc, text, x, y, opts){
+  opts = opts || {};
+  if(!containsNonLatin(text)){
+    doc.text(text, x, y, opts.align ? { align: opts.align } : undefined);
+    return;
   }
+  const fontMM = opts.fontMM || 3.5;
+  const color = opts.color || '#1a1a1a';
+  const img = renderTextToImage(text, fontMM, color, opts.weight);
+  let drawX = x;
+  if(opts.align === 'right') drawX = x - img.wmm;
+  if(opts.align === 'center') drawX = x - img.wmm/2;
+  doc.addImage(img.dataUrl, 'PNG', drawX, y - img.baselineMM, img.wmm, img.hmm);
 }
 
-/* ================= WHATSAPP SHARE ================= */
-function shareWhatsApp(){
-  if(!lastResult){ alert('कृपया आधी गणना करा'); return; }
-  const clientNameVal = (document.getElementById('clientName').value||'').trim();
-  const childNameVal = (document.getElementById('childName').value||'').trim();
-  let text = `*मुलांचे शिक्षण व लग्न नियोजन*\n`;
-  if(clientNameVal) text += `क्लायंट: ${clientNameVal}\n`;
-  if(childNameVal) text += `मूल: ${childNameVal} (वय ${document.getElementById('childAge').value})\n`;
-  text += `_Valmik Dagu Ugale — ARN-142382_\n\n`;
-  lastResult.forEach(g=>{
+// Wraps + rasterizes a full paragraph to fit a given width. Line height is
+// derived from real measured ink extents so matras are never clipped.
+function renderParagraphToImage(text, maxWidthMM, fontMM, color, opts){
+  opts = opts || {};
+  const weight = opts.weight || 'normal';
+  const align = opts.align || 'left';
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const fontPx = Math.round(fontMM * PDF_PX_PER_MM);
+  const maxWidthPx = Math.round(maxWidthMM * PDF_PX_PER_MM);
+  const fontSpec = weight+' '+fontPx+'px "Noto Sans Devanagari", "Nirmala UI", Arial, sans-serif';
+
+  canvas.width = maxWidthPx;
+  canvas.height = 10;
+  ctx.font = fontSpec;
+
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+  words.forEach(word=>{
+    const test = currentLine ? currentLine+' '+word : word;
+    if(ctx.measureText(test).width > maxWidthPx && currentLine){
+      lines.push(currentLine); currentLine = word;
+    } else currentLine = test;
+  });
+  if(currentLine) lines.push(currentLine);
+
+  const box = measureInkBox(ctx, lines.join(' '), fontPx);
+  const padV = Math.ceil(fontPx * 0.3);
+  const lineHeightPx = Math.ceil(box.ascent + box.descent) + padV * 2;
+
+  canvas.height = lineHeightPx * lines.length + 4;
+  ctx.font = fontSpec;
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'alphabetic';
+
+  lines.forEach((line,i)=>{
+    let x = 3;
+    if(align === 'center') x = (maxWidthPx - ctx.measureText(line).width) / 2;
+    const baselineY = i*lineHeightPx + box.ascent + padV;
+    ctx.fillText(line, x, baselineY);
+  });
+
+  return {
+    dataUrl: canvas.toDataURL('image/png'),
+    wmm: maxWidthPx / PDF_PX_PER_MM,
+    hmm: canvas.height / PDF_PX_PER_MM
+  };
+}
+
+// Adds a new page and resets y if there isn't enough room left
+function ensureSpace(doc, y, neededMM, margin){
+  const pageH = doc.internal.pageSize.getHeight();
+  if(y + neededMM > pageH - margin){
+    doc.addPage();
+    return margin;
+  }
+  return y;
+}
+
+function buildPdfDoc(){
+  if(!lastResult){
+    alert('कृपया आधी "SIP गणना करा" दाबून प्लॅन तयार करा.');
+    return null;
+  }
+  if(!window.jspdf){
+    alert('PDF तयार करणारी लायब्ररी अजून लोड होत आहे, कृपया 2-3 सेकंदांनी पुन्हा प्रयत्न करा.');
+    return null;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'mm', format:'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 15;
+  let y = 15;
+
+  const clientName = document.getElementById('clientName').value || 'ग्राहक';
+  const childName = document.getElementById('childName').value || '';
+  const childAge = document.getElementById('childAge').value;
+  const calcDate = document.getElementById('reportDate').value || '';
+
+  // --- Header: Logo + Name/ARN ---
+  try{
+    const logoImg = document.querySelector('.lh-logo img');
+    if(logoImg && logoImg.src) doc.addImage(logoImg.src, 'PNG', margin, y, 20, 17.7);
+  }catch(e){ /* logo optional */ }
+
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(15);
+  doc.setTextColor(30,58,138);
+  doc.text('Valmik Dagu Ugale | ARN-142382', margin+22, y+6);
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(10.5);
+  doc.setTextColor(90,90,90);
+  doc.text('AMFI-registered mutual fund distributor & SIF distributor', margin+22, y+11.5);
+
+  pdfSafeText(doc, 'तुमच्या आर्थिक भविष्याचा विश्वासू जोडीदार', margin+22, y+17.5, { fontMM:4.0, color:'#1e3a8a', weight:'italic' });
+
+  doc.setFontSize(10);
+  doc.text('Contact: 8087126804  |  valmikugale@gmail.com', pageW-margin, y+4, { align:'right' });
+  doc.text('Nashik, Maharashtra - 422003', pageW-margin, y+8.5, { align:'right' });
+
+  y += 27;
+  doc.setDrawColor(30,58,138);
+  doc.setLineWidth(0.6);
+  doc.line(margin, y, pageW-margin, y);
+  y += 10;
+
+  // --- Title ---
+  pdfSafeText(doc, 'मुलांचे शिक्षण व लग्न खर्च नियोजन अहवाल', margin, y, { fontMM:6.3, color:'#1e3a8a', weight:'bold' });
+  y += 9;
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(11.5);
+  doc.setTextColor(50,50,50);
+  pdfSafeText(doc, 'Client Name: '+clientName, margin, y, { fontMM:4.3, color:'#323232' });
+  doc.text('Date: '+calcDate, pageW-margin, y, { align:'right' });
+  y += 7;
+  if(childName){
+    pdfSafeText(doc, "मुलाचे/मुलीचे नाव: "+childName, margin, y, { fontMM:4.0, color:'#323232' });
+    pdfSafeText(doc, 'सध्याचे वय: '+childAge+' वर्षे', pageW-margin, y, { fontMM:4.0, color:'#323232', align:'right' });
+    y += 7;
+  }
+  y += 2.5;
+
+  // --- Per-goal sections ---
+  for(const g of lastResult){
+    y = ensureSpace(doc, y, 25, margin);
+
+    doc.setFillColor(30,58,138);
+    doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F');
+    pdfSafeText(doc, g.emoji+' '+g.label+' ध्येय  (आजपासून '+g.years.toFixed(0)+' वर्षांनी)', margin+3, y, { fontMM:4.6, color:'#ffffff', weight:'bold' });
+    y += 10.5;
+
+    const inflationVal = document.getElementById(g.label==='शिक्षण'?'eduInflation':'marInflation').value;
+    const paramRows = [
+      ['आजची किंमत / Current Cost', 'Rs. '+Math.round(g.currentCost).toLocaleString('en-IN')],
+      ['महागाई दर / Inflation Rate', inflationVal+'%'],
+    ];
+    if(g.existing > 0) paramRows.push(['आधीची बचत / Existing Savings', 'Rs. '+Math.round(g.existing).toLocaleString('en-IN')]);
+
+    doc.setFontSize(12);
+    paramRows.forEach(([label, val])=>{
+      doc.setFont('helvetica','normal');
+      doc.setTextColor(70,70,70);
+      pdfSafeText(doc, label, margin, y, { fontMM:3.9, color:'#464646' });
+      doc.setFont('helvetica','bold');
+      doc.setTextColor(30,30,30);
+      pdfSafeText(doc, val, pageW-margin, y, { fontMM:3.9, color:'#1e1e1e', align:'right' });
+      doc.setDrawColor(230,230,230);
+      doc.setLineWidth(0.2);
+      doc.line(margin, y+2.2, pageW-margin, y+2.2);
+      y += 9;
+    });
+
+    y += 2;
+    pdfSafeText(doc, 'भविष्यातील किंमत / Future Cost Needed', margin, y, { fontMM:4.1, color:'#1e1e1e', weight:'bold' });
+    pdfSafeText(doc, 'Rs. '+Math.round(g.futureCost).toLocaleString('en-IN'), pageW-margin, y, { fontMM:4.1, color:'#1e3a8a', weight:'bold', align:'right' });
+    y += 10.5;
+
+    // --- SIP Options ---
+    y = ensureSpace(doc, y, 12, margin);
+    doc.setFillColor(30,58,138);
+    doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F');
+    pdfSafeText(doc, 'आवश्यक मासिक SIP पर्याय / Required Monthly SIP Options', margin+3, y, { fontMM:4.3, color:'#ffffff', weight:'bold' });
+    y += 10.5;
+
     const mr = g.annualReturn/12/100;
     const p1 = solveSIP(g.netTarget, g.months, mr, 'level', 0);
     const p2 = solveSIP(g.netTarget, g.months, mr, 'percent', g.stepPct);
     const p3 = solveSIP(g.netTarget, g.months, mr, 'fixed', g.stepFix);
-    text += `${g.emoji} *${g.label}* (${g.years.toFixed(0)} वर्षांनी)\n`;
-    text += `भविष्यातील खर्च: ${inr(g.futureCost)}\n`;
-    text += `1. Normal SIP: ${inr(p1)}/महिना\n`;
-    text += `2. Step-up ${g.stepPct}%: ${inr(p2)}/महिना\n`;
-    text += `3. Fixed +${inr(g.stepFix)}/वर्ष: ${inr(p3)}/महिना\n\n`;
+    const sipRows = [
+      ['1. Normal Fixed SIP', 'Rs. '+Math.round(p1).toLocaleString('en-IN')+'/mo'],
+      ['2. % Step-Up SIP ('+g.stepPct+'% p.a.)', 'Rs. '+Math.round(p2).toLocaleString('en-IN')+'/mo'],
+      ['3. Fixed Amount Step-Up (+Rs. '+Math.round(g.stepFix).toLocaleString('en-IN')+'/yr)', 'Rs. '+Math.round(p3).toLocaleString('en-IN')+'/mo'],
+    ];
+    sipRows.forEach(([label,val], idx)=>{
+      y = ensureSpace(doc, y, 10, margin);
+      if(idx%2===0){ doc.setFillColor(240,253,244); doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F'); }
+      doc.setFont('helvetica','normal'); doc.setFontSize(11.5); doc.setTextColor(50,50,50);
+      doc.text(label, margin+3, y);
+      doc.setFont('helvetica','bold'); doc.setTextColor(21,128,61);
+      doc.text(val, pageW-margin-3, y, { align:'right' });
+      y += 9.5;
+    });
+
+    // Overshoot note (fixed step-up alone already exceeds the goal)
+    if(p3 < 1){
+      doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(100,100,100);
+      const noteLines = doc.splitTextToSize(
+        'Note: The given fixed yearly increase is large enough on its own to reach the goal over this period, so no separate starting SIP is required for this option.',
+        pageW-margin*2-4
+      );
+      doc.text(noteLines, margin+3, y);
+      y += noteLines.length*4.2;
+    }
+    y += 6;
+
+    // --- Cost-of-delay urgency box ---
+    if(g.delayShortfallAmt!==null && g.delayShortfallAmt>0){
+      const locative = g.label==='शिक्षण' ? 'शिक्षणात' : 'लग्नात';
+      const boxW = pageW - margin*2;
+      const urgencyPara = renderParagraphToImage(
+        g.emoji+' '+g.label+' ध्येयासाठी SIP आजपासून 1 वर्ष उशिरा सुरू केल्यास, Rs. '+Math.round(g.delayShortfallAmt).toLocaleString('en-IN')+
+        ' इतकी रक्कम कमी मिळेल. आणि '+locative+' तडजोड करावी लागेल.',
+        boxW-10, 4.0, '#78350f', { weight:'bold' }
+      );
+      const ctaLine = renderParagraphToImage(
+        'त्यामुळे लवकर सुरुवात हीच सर्वात मोठी गरज आहे — आजच कॉल किंवा WhatsApp करून मार्गदर्शन घ्या. 8087126804',
+        boxW-10, 4.0, '#92400e', {}
+      );
+      const boxH = urgencyPara.hmm + ctaLine.hmm + 16;
+      y = ensureSpace(doc, y, boxH+6, margin);
+
+      doc.setFillColor(255,251,235);
+      doc.setDrawColor(253,230,138);
+      doc.roundedRect(margin, y, boxW, boxH, 2, 2, 'FD');
+      doc.setFillColor(217,119,6);
+      doc.rect(margin, y, 1.8, boxH, 'F');
+      let innerY = y+6;
+      doc.addImage(urgencyPara.dataUrl, 'PNG', margin+4, innerY, urgencyPara.wmm, urgencyPara.hmm);
+      innerY += urgencyPara.hmm + 3.5;
+      doc.addImage(ctaLine.dataUrl, 'PNG', margin+4, innerY, ctaLine.wmm, ctaLine.hmm);
+      doc.link(margin, y, boxW, boxH, { url:'https://wa.me/918087126804' });
+      y += boxH + 8;
+    }
+  }
+
+  // --- Combined summary (if both goals active) ---
+  if(lastResult.length > 1){
+    y = ensureSpace(doc, y, 40, margin);
+    let cOpt1=0,cOpt2=0,cOpt3=0;
+    lastResult.forEach(g=>{
+      const mr=g.annualReturn/12/100;
+      cOpt1 += solveSIP(g.netTarget,g.months,mr,'level',0);
+      cOpt2 += solveSIP(g.netTarget,g.months,mr,'percent',g.stepPct);
+      cOpt3 += solveSIP(g.netTarget,g.months,mr,'fixed',g.stepFix);
+    });
+    doc.setFillColor(30,58,138);
+    doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F');
+    pdfSafeText(doc, '📊 दोन्ही ध्येयांसाठी एकत्रित मासिक हप्ता / Combined Monthly SIP', margin+3, y, { fontMM:4.3, color:'#ffffff', weight:'bold' });
+    y += 10.5;
+
+    const combRows = [
+      ['1. Normal SIP', 'Rs. '+Math.round(cOpt1).toLocaleString('en-IN')+'/mo'],
+      ['2. Step-up % SIP', 'Rs. '+Math.round(cOpt2).toLocaleString('en-IN')+'/mo'],
+      ['3. Step-up Fixed SIP', 'Rs. '+Math.round(cOpt3).toLocaleString('en-IN')+'/mo'],
+    ];
+    combRows.forEach(([label,val], idx)=>{
+      y = ensureSpace(doc, y, 10, margin);
+      if(idx%2===0){ doc.setFillColor(240,253,244); doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F'); }
+      doc.setFont('helvetica','normal'); doc.setFontSize(11.5); doc.setTextColor(50,50,50);
+      doc.text(label, margin+3, y);
+      doc.setFont('helvetica','bold'); doc.setTextColor(21,128,61);
+      doc.text(val, pageW-margin-3, y, { align:'right' });
+      y += 9.5;
+    });
+    y += 6;
+  }
+
+  // --- WhatsApp CTA Banner ---
+  {
+    const boxW = pageW - margin*2;
+    y = ensureSpace(doc, y, 22, margin);
+    const bannerText = renderParagraphToImage(
+      'संपत्ती निर्मिती | मुलांचं शिक्षण-लग्न खर्च | निवृत्तीनंतर उत्पन्न - मोफत मार्गदर्शनासाठी कॉल / WhatsApp करा 8087126804',
+      boxW-10, 4.0, '#052e12', { weight:'bold', align:'center' }
+    );
+    const bannerH = bannerText.hmm + 9;
+    doc.setFillColor(37,211,102);
+    doc.roundedRect(margin, y, boxW, bannerH, 2, 2, 'F');
+    doc.addImage(bannerText.dataUrl, 'PNG', margin+5, y+4.5, bannerText.wmm, bannerText.hmm);
+    doc.link(margin, y, boxW, bannerH, { url:'https://wa.me/918087126804' });
+    y += bannerH + 8;
+  }
+
+  // --- Final CTA ---
+  {
+    const boxW = pageW - margin*2;
+    const ctaPara1 = renderParagraphToImage(
+      'कॅल्क्युलेटरने तुम्हाला फक्त आवश्यक आकडेवारी दाखवली आहे. पण हा प्लॅन प्रत्यक्षात कसा राबवायचा, तुमच्या गरजेनुसार योग्य म्युच्युअल फंड योजना कशा निवडायच्या आणि पोर्टफोलिओचं स्ट्रक्चर कसे असावे?',
+      boxW-10, 3.7, '#166534', { align:'center' }
+    );
+    const ctaPara2 = renderParagraphToImage(
+      'हे सविस्तर समजून घेण्यासाठी व तुमच्या सर्व शंकांचे निरसन करण्यासाठी आजच मोफत:',
+      boxW-10, 3.7, '#166534', { align:'center' }
+    );
+    const ctaLine2 = renderParagraphToImage(
+      'WhatsApp मेसेज करा  |  मोफत कॉल करा: 8087126804',
+      boxW-10, 4.3, '#166534', { weight:'bold', align:'center' }
+    );
+    const ctaBoxH = ctaPara1.hmm + ctaPara2.hmm + ctaLine2.hmm + 20;
+    y = ensureSpace(doc, y, ctaBoxH+6, margin);
+
+    doc.setFillColor(240,253,244);
+    doc.setDrawColor(134,239,172);
+    doc.roundedRect(margin, y, boxW, ctaBoxH, 2, 2, 'FD');
+    let cy = y+7;
+    doc.addImage(ctaPara1.dataUrl, 'PNG', margin+5, cy, ctaPara1.wmm, ctaPara1.hmm);
+    cy += ctaPara1.hmm + 3.5;
+    doc.addImage(ctaPara2.dataUrl, 'PNG', margin+5, cy, ctaPara2.wmm, ctaPara2.hmm);
+    cy += ctaPara2.hmm + 3.5;
+    doc.addImage(ctaLine2.dataUrl, 'PNG', margin+5, cy, ctaLine2.wmm, ctaLine2.hmm);
+    doc.link(margin, y, boxW, ctaBoxH, { url:'https://wa.me/918087126804' });
+    y += ctaBoxH + 8;
+  }
+
+  y = ensureSpace(doc, y, 32, margin);
+
+  // --- Disclaimer ---
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(70,70,70);
+  doc.text('Disclaimer:', margin, y);
+  y += 5.5;
+
+  const disclaimerPoints = [
+    'Past performance may or may not be sustained in future and is not a guarantee of any future returns.',
+    'Please note that these calculators are for illustrations only and do not represent actual returns.',
+    'Mutual Funds do not have a fixed rate of return and it is not possible to predict the rate of return.',
+    'Mutual Fund Investments are subject to market risks, read all scheme related documents carefully.',
+    'This report is generated based on the assumptions entered by the client.'
+  ];
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  disclaimerPoints.forEach((point, idx)=>{
+    const lines = doc.splitTextToSize((idx+1)+'. '+point, pageW-margin*2-4);
+    doc.text(lines, margin+2, y);
+    y += lines.length*4.8;
   });
-  text += `अधिक माहितीसाठी संपर्क साधा.\nम्युच्युअल फंड गुंतवणूक ही बाजार जोखमीच्या अधीन आहे.`;
-  window.open('https://wa.me/'+ADVISOR_PHONE+'?text='+encodeURIComponent(text), '_blank');
+
+  return doc;
+}
+
+// Builds the PDF filename as "{ClientName}'s Child Education & Marriage Plan.pdf"
+function buildPdfFileName(clientName){
+  const safeName = (clientName || 'Client').replace(/[\\/:*?"<>|]/g, '-').trim();
+  return safeName + "'s Child Education & Marriage Plan.pdf";
+}
+
+function downloadPdfReport(){
+  const doc = buildPdfDoc();
+  if(!doc) return;
+  const clientName = document.getElementById('clientName').value || 'Client';
+  doc.save(buildPdfFileName(clientName));
+}
+
+async function sharePdfWhatsApp(){
+  const doc = buildPdfDoc();
+  if(!doc) return;
+  const clientName = document.getElementById('clientName').value || 'ग्राहक';
+  const fileName = buildPdfFileName(clientName);
+  const blob = doc.output('blob');
+
+  const shared = await tryNativeShare(blob, fileName, 'Child Education & Marriage Plan - '+clientName);
+  if(!shared){
+    doc.save(fileName);
+    const waText = encodeURIComponent('नमस्ते! माझा Child Education & Marriage Plan PDF सोबत जोडत आहे (attach करत आहे).');
+    window.open('https://wa.me/'+ADVISOR_PHONE+'?text='+waText, '_blank');
+  }
+}
+
+async function sharePdfEmail(){
+  const doc = buildPdfDoc();
+  if(!doc) return;
+  const clientName = document.getElementById('clientName').value || 'ग्राहक';
+  const fileName = buildPdfFileName(clientName);
+  const blob = doc.output('blob');
+
+  const shared = await tryNativeShare(blob, fileName, 'Child Education & Marriage Plan - '+clientName);
+  if(!shared){
+    doc.save(fileName);
+    const subject = encodeURIComponent('Child Education & Marriage Plan - '+clientName);
+    const body = encodeURIComponent('नमस्ते,\n\nमाझा Child Education & Marriage Plan PDF सोबत जोडत आहे (attach करत आहे).\n\nधन्यवाद.');
+    window.location.href = 'mailto:valmikugale@gmail.com?subject='+subject+'&body='+body;
+  }
+}
+
+async function tryNativeShare(blob, fileName, title){
+  try{
+    const file = new File([blob], fileName, { type:'application/pdf' });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title:title });
+      return true;
+    }
+  }catch(e){
+    // user cancelled share or share failed — fall back to download
+  }
+  return false;
 }
 </script>
 </body>
