@@ -890,42 +890,59 @@ function buildPdfDoc(){
   }catch(e){ /* logo optional */ }
 
   doc.setFont('helvetica','bold');
-  doc.setFontSize(15);
+  doc.setFontSize(15.5);
   doc.setTextColor(30,58,138);
   doc.text('Valmik Dagu Ugale | ARN-142382', margin+22, y+6);
 
   doc.setFont('helvetica','normal');
-  doc.setFontSize(10.5);
+  doc.setFontSize(11);
   doc.setTextColor(90,90,90);
   doc.text('AMFI-registered mutual fund distributor & SIF distributor', margin+22, y+11.5);
 
-  pdfSafeText(doc, 'तुमच्या आर्थिक भविष्याचा विश्वासू जोडीदार', margin+22, y+17.5, { fontMM:4.0, color:'#1e3a8a', weight:'italic' });
+  pdfSafeText(doc, 'तुमच्या आर्थिक भविष्याचा विश्वासू जोडीदार', margin+22, y+17.5, { fontMM:4.3, color:'#1e3a8a', weight:'italic' });
 
-  doc.setFontSize(10);
-  doc.text('Contact: 8087126804  |  valmikugale@gmail.com', pageW-margin, y+4, { align:'right' });
-  doc.text('Nashik, Maharashtra - 422003', pageW-margin, y+8.5, { align:'right' });
+  // Contact block sits BELOW the name/role/tagline (not beside it) so long
+  // name/ARN text never crowds into "Contact:" — this was the overlap bug.
+  doc.setFontSize(10.5);
+  doc.setTextColor(90,90,90);
+  doc.text('Contact: 8087126804  |  valmikugale@gmail.com', pageW-margin, y+22, { align:'right' });
+  doc.text('Nashik, Maharashtra - 422003', pageW-margin, y+26.5, { align:'right' });
 
-  y += 27;
+  y += 33;
   doc.setDrawColor(30,58,138);
   doc.setLineWidth(0.6);
   doc.line(margin, y, pageW-margin, y);
   y += 10;
 
   // --- Title ---
-  pdfSafeText(doc, 'मुलांचे शिक्षण व लग्न खर्च नियोजन अहवाल', margin, y, { fontMM:6.3, color:'#1e3a8a', weight:'bold' });
+  pdfSafeText(doc, 'मुलांचे शिक्षण व लग्न खर्च नियोजन अहवाल', margin, y, { fontMM:7.0, color:'#1e3a8a', weight:'bold' });
   y += 9;
 
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(11.5);
-  doc.setTextColor(50,50,50);
-  pdfSafeText(doc, 'Client Name: '+clientName, margin, y, { fontMM:4.3, color:'#323232' });
-  doc.text('Date: '+calcDate, pageW-margin, y, { align:'right' });
-  y += 7;
-  if(childName){
-    pdfSafeText(doc, "मुलाचे/मुलीचे नाव: "+childName, margin, y, { fontMM:4.0, color:'#323232' });
-    pdfSafeText(doc, 'सध्याचे वय: '+childAge+' वर्षे', pageW-margin, y, { fontMM:4.0, color:'#323232', align:'right' });
-    y += 7;
+  // --- Self-branding badge (highlighted, right below the headline) ---
+  {
+    const badgeText = renderParagraphToImage(
+      '9+ वर्षांचा अनुभव  |  AMFI-registered  |  SEBI Regulated',
+      pageW-margin*2-10, 4.4, '#2F7D5C', { weight:'bold', align:'center' }
+    );
+    const badgeBoxH = badgeText.hmm + 7;
+    doc.setFillColor(234,244,239);
+    doc.setDrawColor(190,224,206);
+    doc.roundedRect(margin, y, pageW-margin*2, badgeBoxH, 2, 2, 'FD');
+    doc.addImage(badgeText.dataUrl, 'PNG', margin+5, y+3.5, badgeText.wmm, badgeText.hmm);
+    y += badgeBoxH + 8;
   }
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(12.5);
+  doc.setTextColor(50,50,50);
+  pdfSafeText(doc, 'Client Name: '+clientName, margin, y, { fontMM:4.6, color:'#323232' });
+  doc.text('Date: '+calcDate, pageW-margin, y, { align:'right' });
+  y += 7.5;
+
+  const childNameDisplay = childName || '—';
+  pdfSafeText(doc, "मुलाचे/मुलीचे नाव (Child's Name): "+childNameDisplay, margin, y, { fontMM:4.3, color:'#323232' });
+  pdfSafeText(doc, 'सध्याचे वय (Current Age): '+childAge, pageW-margin, y, { fontMM:4.3, color:'#323232', align:'right' });
+  y += 7.5;
   y += 2.5;
 
   // --- Per-goal sections ---
@@ -934,7 +951,7 @@ function buildPdfDoc(){
 
     doc.setFillColor(30,58,138);
     doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F');
-    pdfSafeText(doc, g.emoji+' '+g.label+' ध्येय  (आजपासून '+g.years.toFixed(0)+' वर्षांनी)', margin+3, y, { fontMM:4.6, color:'#ffffff', weight:'bold' });
+    pdfSafeText(doc, g.emoji+' '+g.label+' ध्येय  (आजपासून '+g.years.toFixed(0)+' वर्षांनी)', margin+3, y, { fontMM:5.0, color:'#ffffff', weight:'bold' });
     y += 10.5;
 
     const inflationVal = document.getElementById(g.label==='शिक्षण'?'eduInflation':'marInflation').value;
@@ -944,30 +961,30 @@ function buildPdfDoc(){
     ];
     if(g.existing > 0) paramRows.push(['आधीची बचत / Existing Savings', 'Rs. '+Math.round(g.existing).toLocaleString('en-IN')]);
 
-    doc.setFontSize(12);
+    doc.setFontSize(12.5);
     paramRows.forEach(([label, val])=>{
       doc.setFont('helvetica','normal');
       doc.setTextColor(70,70,70);
-      pdfSafeText(doc, label, margin, y, { fontMM:3.9, color:'#464646' });
+      pdfSafeText(doc, label, margin, y, { fontMM:4.2, color:'#464646' });
       doc.setFont('helvetica','bold');
       doc.setTextColor(30,30,30);
-      pdfSafeText(doc, val, pageW-margin, y, { fontMM:3.9, color:'#1e1e1e', align:'right' });
+      pdfSafeText(doc, val, pageW-margin, y, { fontMM:4.2, color:'#1e1e1e', align:'right' });
       doc.setDrawColor(230,230,230);
       doc.setLineWidth(0.2);
       doc.line(margin, y+2.2, pageW-margin, y+2.2);
-      y += 9;
+      y += 9.3;
     });
 
     y += 2;
-    pdfSafeText(doc, 'भविष्यातील किंमत / Future Cost Needed', margin, y, { fontMM:4.1, color:'#1e1e1e', weight:'bold' });
-    pdfSafeText(doc, 'Rs. '+Math.round(g.futureCost).toLocaleString('en-IN'), pageW-margin, y, { fontMM:4.1, color:'#1e3a8a', weight:'bold', align:'right' });
+    pdfSafeText(doc, 'भविष्यातील किंमत / Future Cost Needed', margin, y, { fontMM:4.5, color:'#1e1e1e', weight:'bold' });
+    pdfSafeText(doc, 'Rs. '+Math.round(g.futureCost).toLocaleString('en-IN'), pageW-margin, y, { fontMM:4.5, color:'#1e3a8a', weight:'bold', align:'right' });
     y += 10.5;
 
     // --- SIP Options ---
     y = ensureSpace(doc, y, 12, margin);
     doc.setFillColor(30,58,138);
     doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F');
-    pdfSafeText(doc, 'आवश्यक मासिक SIP पर्याय / Required Monthly SIP Options', margin+3, y, { fontMM:4.3, color:'#ffffff', weight:'bold' });
+    pdfSafeText(doc, 'आवश्यक मासिक SIP पर्याय / Required Monthly SIP Options', margin+3, y, { fontMM:4.6, color:'#ffffff', weight:'bold' });
     y += 10.5;
 
     const mr = g.annualReturn/12/100;
@@ -982,7 +999,7 @@ function buildPdfDoc(){
     sipRows.forEach(([label,val], idx)=>{
       y = ensureSpace(doc, y, 10, margin);
       if(idx%2===0){ doc.setFillColor(240,253,244); doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F'); }
-      doc.setFont('helvetica','normal'); doc.setFontSize(11.5); doc.setTextColor(50,50,50);
+      doc.setFont('helvetica','normal'); doc.setFontSize(12); doc.setTextColor(50,50,50);
       doc.text(label, margin+3, y);
       doc.setFont('helvetica','bold'); doc.setTextColor(21,128,61);
       doc.text(val, pageW-margin-3, y, { align:'right' });
@@ -1008,11 +1025,11 @@ function buildPdfDoc(){
       const urgencyPara = renderParagraphToImage(
         g.emoji+' '+g.label+' ध्येयासाठी SIP आजपासून 1 वर्ष उशिरा सुरू केल्यास, Rs. '+Math.round(g.delayShortfallAmt).toLocaleString('en-IN')+
         ' इतकी रक्कम कमी मिळेल. आणि '+locative+' तडजोड करावी लागेल.',
-        boxW-10, 4.0, '#78350f', { weight:'bold' }
+        boxW-10, 4.3, '#78350f', { weight:'bold' }
       );
       const ctaLine = renderParagraphToImage(
         'त्यामुळे लवकर सुरुवात हीच सर्वात मोठी गरज आहे — आजच कॉल किंवा WhatsApp करून मार्गदर्शन घ्या. 8087126804',
-        boxW-10, 4.0, '#92400e', {}
+        boxW-10, 4.3, '#92400e', {}
       );
       const boxH = urgencyPara.hmm + ctaLine.hmm + 16;
       y = ensureSpace(doc, y, boxH+6, margin);
@@ -1043,7 +1060,7 @@ function buildPdfDoc(){
     });
     doc.setFillColor(30,58,138);
     doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F');
-    pdfSafeText(doc, '📊 दोन्ही ध्येयांसाठी एकत्रित मासिक हप्ता / Combined Monthly SIP', margin+3, y, { fontMM:4.3, color:'#ffffff', weight:'bold' });
+    pdfSafeText(doc, '📊 दोन्ही ध्येयांसाठी एकत्रित मासिक हप्ता / Combined Monthly SIP', margin+3, y, { fontMM:4.6, color:'#ffffff', weight:'bold' });
     y += 10.5;
 
     const combRows = [
@@ -1054,7 +1071,7 @@ function buildPdfDoc(){
     combRows.forEach(([label,val], idx)=>{
       y = ensureSpace(doc, y, 10, margin);
       if(idx%2===0){ doc.setFillColor(240,253,244); doc.rect(margin, y-6, pageW-margin*2, 9.5, 'F'); }
-      doc.setFont('helvetica','normal'); doc.setFontSize(11.5); doc.setTextColor(50,50,50);
+      doc.setFont('helvetica','normal'); doc.setFontSize(12); doc.setTextColor(50,50,50);
       doc.text(label, margin+3, y);
       doc.setFont('helvetica','bold'); doc.setTextColor(21,128,61);
       doc.text(val, pageW-margin-3, y, { align:'right' });
@@ -1069,7 +1086,7 @@ function buildPdfDoc(){
     y = ensureSpace(doc, y, 22, margin);
     const bannerText = renderParagraphToImage(
       'संपत्ती निर्मिती | मुलांचं शिक्षण-लग्न खर्च | निवृत्तीनंतर उत्पन्न - मोफत मार्गदर्शनासाठी कॉल / WhatsApp करा 8087126804',
-      boxW-10, 4.0, '#052e12', { weight:'bold', align:'center' }
+      boxW-10, 4.3, '#052e12', { weight:'bold', align:'center' }
     );
     const bannerH = bannerText.hmm + 9;
     doc.setFillColor(37,211,102);
@@ -1084,15 +1101,15 @@ function buildPdfDoc(){
     const boxW = pageW - margin*2;
     const ctaPara1 = renderParagraphToImage(
       'कॅल्क्युलेटरने तुम्हाला फक्त आवश्यक आकडेवारी दाखवली आहे. पण हा प्लॅन प्रत्यक्षात कसा राबवायचा, तुमच्या गरजेनुसार योग्य म्युच्युअल फंड योजना कशा निवडायच्या आणि पोर्टफोलिओचं स्ट्रक्चर कसे असावे?',
-      boxW-10, 3.7, '#166534', { align:'center' }
+      boxW-10, 4.0, '#166534', { align:'center' }
     );
     const ctaPara2 = renderParagraphToImage(
       'हे सविस्तर समजून घेण्यासाठी व तुमच्या सर्व शंकांचे निरसन करण्यासाठी आजच मोफत:',
-      boxW-10, 3.7, '#166534', { align:'center' }
+      boxW-10, 4.0, '#166534', { align:'center' }
     );
     const ctaLine2 = renderParagraphToImage(
       'WhatsApp मेसेज करा  |  मोफत कॉल करा: 8087126804',
-      boxW-10, 4.3, '#166534', { weight:'bold', align:'center' }
+      boxW-10, 4.6, '#166534', { weight:'bold', align:'center' }
     );
     const ctaBoxH = ctaPara1.hmm + ctaPara2.hmm + ctaLine2.hmm + 20;
     y = ensureSpace(doc, y, ctaBoxH+6, margin);
@@ -1113,7 +1130,7 @@ function buildPdfDoc(){
   y = ensureSpace(doc, y, 32, margin);
 
   // --- Disclaimer ---
-  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(70,70,70);
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(70,70,70);
   doc.text('Disclaimer:', margin, y);
   y += 5.5;
 
@@ -1125,11 +1142,11 @@ function buildPdfDoc(){
     'This report is generated based on the assumptions entered by the client.'
   ];
 
-  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  doc.setFont('helvetica','normal'); doc.setFontSize(10);
   disclaimerPoints.forEach((point, idx)=>{
     const lines = doc.splitTextToSize((idx+1)+'. '+point, pageW-margin*2-4);
     doc.text(lines, margin+2, y);
-    y += lines.length*4.8;
+    y += lines.length*5;
   });
 
   return doc;
