@@ -738,9 +738,12 @@ function resetAll(){
 // Pure-English text with no ₹ (disclaimer, table headers) stays native jsPDF text —
 // it's crisp and doesn't need this workaround.
 
-function textToImage(text, fontSize, color, maxWidth, weight, align){
+const PT2MM = 0.352778; // convert a point size to millimetres, matching jsPDF's own unit convention
+
+function textToImage(text, fontSizePt, color, maxWidth, weight, align){
   weight = weight || '600';
   align = align || 'left';
+  const fontSize = fontSizePt * PT2MM; // internal canvas math is in mm (doc unit)
   const scale = 3; // high-res for crisp mobile/print text
   const c = document.createElement('canvas');
   const ctx = c.getContext('2d');
@@ -754,28 +757,29 @@ function textToImage(text, fontSize, color, maxWidth, weight, align){
     else cur=test;
   });
   if(cur) lines.push(cur);
-  const lineHeight = fontSize*scale*1.5;
+  const lineHeight = fontSize*scale*1.42;
   c.width = maxWidth*scale;
-  c.height = lineHeight*lines.length + 10*scale;
+  c.height = lineHeight*lines.length + 6*scale;
   ctx.font = weight+' '+(fontSize*scale)+'px '+fontStack;
   ctx.fillStyle = color;
   ctx.textAlign = align;
   ctx.textBaseline = 'top';
   lines.forEach((line,i)=>{
     const x = align==='center'? c.width/2 : (align==='right'? c.width : 0);
-    ctx.fillText(line, x, i*lineHeight + 5*scale);
+    ctx.fillText(line, x, i*lineHeight + 3*scale);
   });
   return {dataUrl:c.toDataURL('image/png'), widthPt:maxWidth, heightPt:(c.height/scale), lines:lines.length};
 }
 
 // One table row (all columns) rendered as a single image so alignment stays exact
 // and every cell — including ₹ figures — shapes correctly.
-function rowToImage(cells, colX, rowWidth, fontSize, color, weight){
+function rowToImage(cells, colX, rowWidth, fontSizePt, color, weight){
+  const fontSize = fontSizePt * PT2MM;
   const scale = 3;
   const c = document.createElement('canvas');
   const ctx = c.getContext('2d');
   const fontStack = '"Noto Sans Devanagari", Arial, sans-serif';
-  const rowHeightPt = fontSize*2.1;
+  const rowHeightPt = fontSize*1.9;
   c.width = rowWidth*scale;
   c.height = rowHeightPt*scale;
   ctx.font = (weight||'500')+' '+(fontSize*scale)+'px '+fontStack;
@@ -906,9 +910,9 @@ async function downloadPDF(){
         doc.setFillColor(251,237,231);
         doc.roundedRect(marginX, y, tableW, dImg.heightPt+8, 2, 2, 'F');
         doc.addImage(dImg.dataUrl,'PNG', marginX+4, y+4, dImg.widthPt, dImg.heightPt);
-        y += dImg.heightPt + 14;
+        y += dImg.heightPt + 8;
       } else {
-        y += 6;
+        y += 4;
       }
     }
 
@@ -949,7 +953,7 @@ async function downloadPDF(){
         doc.addImage(rowImg.dataUrl, 'PNG', marginX, y+(8.5-rowImg.heightPt)/2, rowImg.widthPt, rowImg.heightPt);
         y += 8.5;
       });
-      y += 8;
+      y += 6;
     }
 
     // ---- Chart (real canvas — copied directly, no shaping risk) ----
