@@ -903,12 +903,14 @@ function buildPdfDoc(){
 
   // Contact block sits BELOW the name/role/tagline (not beside it) so long
   // name/ARN text never crowds into "Contact:" — this was the overlap bug.
+  // Each contact detail is its own line, stacked, right-aligned.
   doc.setFontSize(10.5);
   doc.setTextColor(90,90,90);
-  doc.text('Contact: 8087126804  |  valmikugale@gmail.com', pageW-margin, y+22, { align:'right' });
-  doc.text('Nashik, Maharashtra - 422003', pageW-margin, y+26.5, { align:'right' });
+  doc.text('Contact: 8087126804', pageW-margin, y+18.5, { align:'right' });
+  doc.text('valmikugale@gmail.com', pageW-margin, y+23, { align:'right' });
+  doc.text('Nashik, Maharashtra - 422003', pageW-margin, y+27.5, { align:'right' });
 
-  y += 33;
+  y += 35;
   doc.setDrawColor(30,58,138);
   doc.setLineWidth(0.6);
   doc.line(margin, y, pageW-margin, y);
